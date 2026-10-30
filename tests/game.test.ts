@@ -3,6 +3,7 @@ import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { GameWorld, safeQuote } from '../src/game/expansion-world';
 import { getAutomationSession } from '../src/game/session';
+import { subscribe } from '../src/game/subscriptions';
 import { fixture } from './helpers/fixtures';
 
 test('capture quote always adds two including re-quotes, and rejects invalid quotes', () => {
@@ -31,4 +32,16 @@ test('game adapter uses native bulk launch and can read routes without a single-
   assert.equal(world.quote(1n, 10n), null);
   await world.launchGroup({ sourceId: 1n, targetId: 10n, count: 8, travelMs: 12000, support: [{ sourceId: 2n, count: 9, travelMs: 12000 }] });
   assert.deepEqual((f.session.conn.reducers.launchSwarmBulk as any).mock.calls[0].arguments[0], { kind: 0, targetId: 10n, launches: [{ sourceId: 1n, probeCount: 8 }, { sourceId: 2n, probeCount: 9 }] });
+});
+
+test('query timeout unsubscribes', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture([]), unsubscribe = mock.fn();
+  f.session.conn.subscriptionBuilder = () => {
+    const builder = { onApplied: () => builder, onError: () => builder, subscribe: () => ({ unsubscribe, isActive: () => false }) };
+    return builder;
+  };
+  const pending = assert.rejects(subscribe(f.session.conn, 'SELECT * FROM planet'), /超时/);
+  t.mock.timers.tick(12000); await pending;
+  assert.equal(unsubscribe.mock.callCount(), 1);
 });

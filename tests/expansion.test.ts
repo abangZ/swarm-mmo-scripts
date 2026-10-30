@@ -138,3 +138,21 @@ test('execution preserves the optimized split that leaves troops for another tar
   assert.deepEqual((f.world.launch as any).mock.calls[0].arguments, [1n, 3n, 5]);
   engine.stop(); t.mock.timers.tick(500); await run;
 });
+
+test('cancelled scan is shown as stopped, while a rejected in-flight request remains an error', async () => {
+  const f = fakeWorld(); let rejectScan!: (error: Error) => void;
+  f.world.scan = () => new Promise<void>((_resolve, reject) => { rejectScan = reject; });
+  const engine = new ExpansionEngine(() => {}, () => f.world);
+  const run = engine.start(defaults); await settle();
+  engine.stop(); rejectScan(new Error('扫描已停止。')); await run;
+  assert.equal(engine.state.activity, 'stopped');
+  assert.equal(engine.state.nextScanAt, null);
+  assert.equal((f.world.launch as any).mock.callCount(), 0);
+  const next = fakeWorld(); let rejectLaunch!: (error: Error) => void;
+  next.world.launch = () => new Promise<void>((_resolve, reject) => { rejectLaunch = reject; });
+  const pending = new ExpansionEngine(() => {}, () => next.world);
+  const request = pending.start(defaults); await settle();
+  pending.stop(); rejectLaunch(new Error('发射失败')); await request;
+  assert.equal(pending.state.activity, 'error');
+  assert.equal(unresolved(), true);
+});

@@ -5,7 +5,7 @@ const banner = `// ==UserScript==
 // @name         Swarm MMO 助手
 // @namespace    swarm-mmo-scripts
 // @version      ${version}
-// @description  手动派兵与自动扩张，智能分配目标并限速发射
+// @description  自动扩张助手，实时状态、派兵队列与运行日志
 // @match        https://www.swarm-mmo.com/play*
 // @match        https://swarm-mmo.com/play*
 // @run-at       document-idle

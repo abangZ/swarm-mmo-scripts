@@ -1,4 +1,4 @@
-// One Web Lock covers both automation and manual helper actions across same-origin tabs.
+// One Web Lock covers all helper operations across same-origin tabs.
 const lockName = 'swarm-helper-operations-v1';
 const uncertainKey = 'swarm-helper-uncertain-v1';
 const lastKey = 'swarm-helper-last-operation-v1';

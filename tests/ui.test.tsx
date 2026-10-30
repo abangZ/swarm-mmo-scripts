@@ -5,7 +5,7 @@ import { act } from 'react';
 import { mountPanel } from '../src/app/mount';
 import { AppController } from '../src/app/controller';
 import { defaults } from '../src/features/expansion/types';
-import { fixture, planet, settle, fakeWorld } from './helpers/fixtures';
+import { settle, fakeWorld } from './helpers/fixtures';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 async function panel(controller?: AppController) {
@@ -23,26 +23,25 @@ async function panel(controller?: AppController) {
   return { root, element, click, select, dispose };
 }
 
-test('React panel finds a target, prevents duplicate clicks and releases the subscription', async () => {
-  const f = fixture([planet(1n, 0, 0, true), planet(2n, 3, 4)]);
-  let resolve!: () => void;
-  f.launchSwarm.mock.mockImplementation(() => new Promise<void>(r => { resolve = r; }));
-  const ui = await panel();
+test('tabs replace manual actions and support keyboard navigation without starting expansion', async () => {
+  const create = mock.fn(() => fakeWorld().world);
+  const ui = await panel(new AppController(create));
   assert.equal(ui.element('panel').hidden, true);
+  assert.match(ui.element('toggle').textContent!, /未启动/);
+  assert.match(ui.element('compact-log').textContent!, /尚无运行日志/);
   await ui.click('toggle');
   assert.equal(ui.root.activeElement, ui.element('collapse'));
-  await ui.click('search');
-  assert.equal(ui.element('send').disabled, false);
-  assert.match(ui.element('target').textContent!, /5.00/);
-  await act(async () => { ui.element('send').click(); ui.element('send').click(); await settle(); });
-  assert.equal(f.launchSwarm.mock.callCount(), 1);
-  await act(async () => { resolve(); await settle(); });
-  assert.match(ui.element('status').textContent!, /服务器已确认/);
-  assert.equal(ui.element('send').disabled, true);
+  assert.equal(ui.root.getElementById('manual'), null);
+  assert.equal(ui.root.getElementById('send'), null);
+  assert.equal(ui.element('tab-expansion').getAttribute('aria-selected'), 'true');
+  await act(async () => ui.element('tab-expansion').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })));
+  assert.equal(ui.element('attack').hidden, false);
+  assert.equal(ui.element('expansion').hidden, true);
+  assert.equal(ui.root.activeElement, ui.element('tab-attack'));
+  assert.match(ui.element('attack').textContent!, /开发中/);
+  assert.equal(create.mock.callCount(), 0);
   await ui.click('collapse');
-  assert.equal(ui.element('toggle').hidden, false);
   assert.equal(ui.root.activeElement, ui.element('toggle'));
-  assert.equal(f.handles[0].isActive(), false);
 });
 
 test('saved settings migrate into controlled fields and save seconds as milliseconds', async () => {
@@ -51,9 +50,6 @@ test('saved settings migrate into controlled fields and save seconds as millisec
   f.world.read = () => { throw new Error('test stop'); };
   const ui = await panel(new AppController(() => f.world));
   await ui.click('toggle');
-  await ui.select('action', 'expansion');
-  assert.equal(ui.element('manual').hidden, true);
-  assert.equal(ui.element('expansion').hidden, false);
   assert.equal(ui.element<HTMLSelectElement>('scanMs').value, '10');
   assert.equal(ui.element<HTMLSelectElement>('maxSources').value, '3');
   assert.equal(ui.element<HTMLInputElement>('candidates').value, '7');
@@ -66,68 +62,75 @@ test('saved settings migrate into controlled fields and save seconds as millisec
   assert.equal(saved.intervalMs, 1500);
   assert.equal(saved.candidates, 7);
   assert.match(ui.element('auto-status').textContent!, /test stop/);
+  assert.match(ui.element('activity-log').textContent!, /test stop/);
+  await ui.click('collapse');
+  assert.match(ui.element('toggle').textContent!, /异常/);
+  assert.match(ui.element('compact-log').textContent!, /test stop/);
 });
 
-test('collapse and mode changes retain one engine; unmount stops it before pending scan dispatches', async () => {
+test('starting folds settings; tabs and collapse keep one engine; unmount cancels pending scan', async () => {
   const f = fakeWorld();
   let finish!: () => void;
   f.world.scan = () => new Promise<void>(resolve => { finish = resolve; });
   const createWorld = mock.fn(() => f.world);
   const ui = await panel(new AppController(createWorld));
-  assert.equal(createWorld.mock.callCount(), 0); // Mount never starts automation.
   await ui.click('toggle');
-  await ui.select('action', 'expansion');
-  await ui.click('start');
+  assert.equal(ui.element('expansion-settings').hidden, false);
+  await act(async () => { ui.element('start').click(); ui.element('start').click(); await settle(); });
+  assert.equal(createWorld.mock.callCount(), 1);
+  assert.equal(ui.element('expansion-settings').hidden, true);
   assert.equal(ui.element('start').disabled, true);
+  await ui.click('settings-toggle');
+  assert.equal(ui.element('expansion-settings').hidden, false);
   assert.equal(ui.element<HTMLSelectElement>('scanMs').disabled, true);
   await ui.click('collapse');
-  assert.match(ui.element('toggle').textContent!, /扩张中/);
+  assert.match(ui.element('toggle').textContent!, /扫描中/);
+  assert.match(ui.element('compact-log').textContent!, /正在扫描/);
   await ui.click('toggle');
-  await ui.select('action', 'manual');
-  assert.equal(ui.element('search').disabled, true);
-  await ui.select('action', 'expansion');
+  await ui.click('tab-attack');
+  assert.match(ui.element('attack').textContent!, /自动扩张仍在运行/);
+  await ui.click('tab-expansion');
   assert.equal(createWorld.mock.callCount(), 1);
   await act(async () => { ui.dispose(); finish(); await settle(); });
-  assert.equal(document.getElementById('swarm-helper-root'), null);
   assert.equal((f.world.launch as any).mock.callCount(), 0);
   assert.equal((f.world.dispose as any).mock.callCount(), 1);
 });
 
-test('unmount during manual search releases its late subscription and stops further searches', async () => {
-  const f = fixture([planet(1n, 0, 0, true)]);
-  let applied!: () => void;
-  const unsubscribe = mock.fn();
-  const subscribe = mock.fn(() => ({ unsubscribe, isActive: () => true }));
-  f.session.conn.subscriptionBuilder = () => {
-    const builder = { onApplied(callback: () => void) { applied = callback; return builder; }, onError() { return builder; }, subscribe };
-    return builder;
-  };
-  const ui = await panel();
+test('running panel reports pending confirmation, scan timing, latest log while collapsed, and stopped state', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: 100000 });
+  const f = fakeWorld();
+  let scanDone!: () => void;
+  f.world.scan = () => new Promise<void>(resolve => { scanDone = resolve; });
+  let acknowledge!: () => void;
+  f.world.launch = mock.fn(() => new Promise<void>(resolve => { acknowledge = resolve; }));
+  const ui = await panel(new AppController(() => f.world));
+  await ui.click('toggle'); await ui.click('start');
+  await act(async () => { t.mock.timers.tick(700); scanDone(); await settle(); });
+  assert.match(ui.element('auto-status').textContent!, /等待服务器确认/);
+  assert.match(ui.element('activity-log').textContent!, /扫描完成/);
+  assert.equal(ui.element('next-scan').textContent, '10 秒后');
+  await ui.click('collapse');
+  assert.match(ui.element('toggle').textContent!, /发送中/);
+  await act(async () => { acknowledge(); await settle(); });
+  assert.match(ui.element('compact-log').textContent!, /已确认发射/);
+  await act(async () => { t.mock.timers.tick(2000); await settle(); });
   await ui.click('toggle');
-  await ui.click('search');
-  await act(async () => { ui.dispose(); applied(); await settle(); });
-  assert.equal(subscribe.mock.callCount(), 1);
-  assert.equal(unsubscribe.mock.callCount(), 1);
-  assert.equal(f.launchSwarm.mock.callCount(), 0);
-});
-
-test('unmount during manual rate-limit wait cancels unsent operations', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
-  localStorage.setItem('swarm-helper-last-operation-v1', '100000');
-  const f = fixture([planet(1n, 0, 0, true), planet(2n, 1, 0)]);
-  const ui = await panel();
-  await ui.click('toggle'); await ui.click('search'); await ui.click('send');
-  await act(async () => { ui.dispose(); t.mock.timers.tick(1500); await settle(); });
-  assert.equal(f.launchSwarm.mock.callCount(), 0);
-  assert.equal(localStorage.getItem('swarm-helper-uncertain-v1'), null);
+  assert.equal(ui.element('next-scan').textContent, '8 秒后');
+  assert.match(ui.element('auto-counts').textContent!, /1已发舰队/);
+  await ui.click('stop');
+  await act(async () => { t.mock.timers.tick(500); await settle(); });
+  assert.equal(ui.element('start').disabled, false);
+  assert.equal(ui.element('stop').disabled, true);
+  await ui.click('collapse');
+  assert.match(ui.element('toggle').textContent!, /已停止/);
 });
 
 test('uncertain outcome disables dispatch until explicit review, without starting automation', async () => {
   localStorage.setItem('swarm-helper-uncertain-v1', 'pending');
   const createWorld = mock.fn(() => fakeWorld().world);
   const ui = await panel(new AppController(createWorld));
+  assert.match(ui.element('toggle').textContent!, /结果未知/);
   await ui.click('toggle');
-  assert.equal(ui.element('search').disabled, true);
   assert.equal(ui.element('start').disabled, true);
   await ui.click('unlock');
   assert.match(ui.element('unlock-status').textContent!, /勾选确认/);

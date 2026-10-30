@@ -57,3 +57,25 @@ test('a new panel cannot dispatch while the old disposed panel still owns a pend
   await withControl(async () => {});
   replacement.dispose();
 });
+
+test('waiting logs are deduplicated and history stays bounded across scans', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  const f = fakeWorld(); f.world.quote = () => null;
+  const controller = new AppController(() => f.world);
+  controller.start(); await settle();
+  const first = controller.getSnapshot();
+  assert.equal(first.expansion.activity, 'waiting');
+  assert.equal(first.expansion.ownedCount, 1);
+  assert.equal(first.expansion.candidateCount, 1);
+  assert.equal(first.expansion.lastScanAt, 100000);
+  t.mock.timers.tick(1000); await settle();
+  assert.equal(controller.getSnapshot().logs.length, first.logs.length);
+  for (let scan = 0; scan < 40; scan++) {
+    t.mock.timers.tick(10000); await settle();
+  }
+  const latest = controller.getSnapshot();
+  assert.equal(latest.logs.length, 100);
+  assert.ok(latest.logs[0].id > first.logs[0].id);
+  assert.equal(latest.logs.at(-1)!.message, latest.expansion.phase);
+  controller.stop(); t.mock.timers.tick(500); await settle(); controller.dispose();
+});
