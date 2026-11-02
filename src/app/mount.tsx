@@ -1,6 +1,7 @@
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { AppController } from './controller';
+import { mountInspector } from './mount-inspector';
 
 const isolatedEvents = ['keydown', 'keyup', 'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'dblclick', 'wheel'];
 
@@ -19,11 +20,13 @@ export function mountPanel(controller = new AppController()): () => void {
     controller.dispose();
     console.error('[Swarm MMO 助手] 面板渲染失败，已停止未发射操作。', error);
   } });
+  const disposeInspector = mountInspector();
   let disposed = false;
   const dispose = () => {
     if (disposed) return;
     disposed = true;
     controller.dispose();
+    disposeInspector();
     root.unmount();
     window.removeEventListener('pagehide', dispose);
     for (const event of isolatedEvents) host.removeEventListener(event, stopPropagation);

@@ -1,6 +1,6 @@
 # 架构与开发约定
 
-当前 v0.11.0，React 19、TypeScript、esbuild、pnpm。发布物为包含 React、React DOM、业务代码与 Shadow DOM 样式的单个 IIFE 油猴脚本。
+当前 v0.12.0，React 19、TypeScript、esbuild、pnpm。发布物为包含 React、React DOM、业务代码与 Shadow DOM 样式的单个 IIFE 油猴脚本。
 
 ## 职责划分
 
@@ -11,7 +11,10 @@
 | `app/settings.ts` / `app/regions.ts` | 旧参数兼容、秒/毫秒转换、独立战区与敌人偏好持久化 |
 | `ui/AutomationPanel.tsx` | 共用运行面板；扩张保留合兵设置，进攻只显示单星参数 |
 | `ui/RegionSettings.tsx` | 地图中心/选中星球取点、区域概览、敌人筛选与定位 |
-| `game/session.ts` / `game/map-selection.ts` | 地图与连接发现、只读取点/地图定位；React Fiber 只出现在 session 层 |
+| `game/session.ts` / `game/map-selection.ts` | 地图与连接发现、只读取点/地图定位 |
+| `game/planet-menu.ts` / `game/incoming-fleets.ts` | 原生菜单目标和边界、独立舰队/联盟订阅与在途汇总；React Fiber 访问仅限 game 层 |
+| `app/planet-inspector.ts` / `app/mount-inspector.tsx` | 在途提示轮询、目标切换和挂载清理 |
+| `ui/PlanetIncoming.tsx` / `ui/planet-incoming.css` | 菜单下方只读浮层、屏幕边缘避让与隔离样式 |
 | `game/expansion-world.ts` | 统一世界适配器：订阅、库存、联盟、原生自动化、舰队、报价、原生发射 |
 | `features/commander/` | 固定区域规则、动态防守预算、共享扫描/账本和两条独立执行队列的生命周期 |
 | `features/attack/planner.ts` | 指定敌人筛选、单星攻击余量、可执行/短期攒兵方案 |
@@ -115,3 +118,15 @@ React 通过 `useSyncExternalStore` 订阅控制器。切换 Tab、收起/展开
 - `operations.test.ts`：跨实例互斥、两队列独立限速与并行回执、取消等待、迟到回执不清除其他标记、旧标记兼容、重载保护和明确解锁。
 
 浏览器检查使用本地模拟页面；真实游戏只做只读接口核对，不为了验证代码操作真实账号。静态接口核对与模拟通过不代表服务端已实际执行进攻。
+
+## 原生菜单在途提示
+
+`mountPanel` 同时创建独立 Shadow DOM 的 `PlanetInspector`，页面卸载一并回收，bfcache 恢复只重建界面。它不依赖 Commander，也不调用 reducer、获取操作锁或修改游戏缓存。UI 仅接收快照，不读取游戏连接。
+
+`planet-menu.ts` 识别原生 `radial-menu` 或 `dial-slider`。行星操作菜单读取其组件的 `planetId`；派兵圆盘读取所属地图组件中具有 `descriptor.targetKind = planet`、匹配圆盘坐标的路线状态。不能使用 `getPickedBody()` 代替菜单目标，因为它描述选中的来源，菜单中的「选中」按钮也可能尚未点击。读取 Fiber 时检查当前提交树，接口形状不匹配或不支持的天体返回空，不猜目标。菜单按钮和说明的实际边界用于定位；页面边缘优先上移，其次侧移并限制在可视区域内，浮层使用 `pointer-events: none`。
+
+每个目标仅持有 `swarm WHERE target_planet_id = ID` 与 `clan_member2` 两个订阅，两个 `onApplied` 都完成才发布完整统计。等待中的句柄也归观察器所有，快速切换和关闭可立即取消；12 秒超时、断线和订阅失效会释放句柄，不自动重试。迟到回调不能恢复已取消的观察器。目标/连接/身份变化会更换观察器，只释放本功能的句柄。
+
+菜单每 250ms 检查，完整舰队汇总最多每秒一次；等待订阅期间可更快更新加载状态。舰队按 `swarmId` 去重、按目标过滤，用 bigint 累加记录兵力并以字符串传到 UI。自己、同联盟和其余玩家分组，未知数量不按零处理。舰队是否仍存在以服务端订阅记录为准，不用本机时钟提前删除预计到期舰队，不模拟损耗和战斗。
+
+`planet-inspector.test.tsx` 覆盖目标与来源分离、React 当前树、派兵圆盘路线、自己/盟友/敌方分类、未知数量、数据更新和移除、加载门槛、超时、快速切换及迟到回调、连接切换、独立清理、React 状态与边界定位。`page-lifecycle.test.ts` 同时检查在途浮层随页面卸载与恢复。

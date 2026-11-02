@@ -1,7 +1,7 @@
 import type { Connection, Planet, Session, AutomationSession, MapController } from './types';
 
 interface Fiber { memoizedProps?: { conn?: Connection; myIdentity?: string; ref?: { current?: MapController } }; ref?: { current?: MapController }; return?: Fiber }
-// The sole dependency on React internals. Fail closed when the site's shape changes.
+// Connection discovery through React internals stays in the game adapter layer.
 export function getSession(): Session {
   for (const canvas of document.querySelectorAll('canvas')) {
     const key = Object.keys(canvas).find(key => key.startsWith('__reactFiber$'));

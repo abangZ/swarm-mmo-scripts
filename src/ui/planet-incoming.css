@@ -1,0 +1,11 @@
+:host { pointer-events: none; }
+.incoming { position: fixed; box-sizing: border-box; width: 270px; max-width: calc(100vw - 16px); padding: 11px 13px; border: 1px solid #7dd3fc55; border-radius: 10px; background: #090f1deb; box-shadow: 0 5px 20px #0006; color: #e5edf6; font: 13px/1.6 system-ui, sans-serif; pointer-events: none; }
+header { display: flex; justify-content: space-between; margin-bottom: 5px; font-weight: 600; }
+small, footer { color: #99a9bc; font-size: 11px; font-weight: 400; }
+.incoming > div { display: flex; gap: 6px; align-items: baseline; }
+strong { margin-left: auto; font-variant-numeric: tabular-nums; }
+.enemy strong { color: #ff9696; }
+.mine strong { color: #81ceff; }
+.ally strong { color: #8ee2b1; }
+p { margin: 5px 0; color: #c5d1df; }
+footer { margin-top: 7px; }

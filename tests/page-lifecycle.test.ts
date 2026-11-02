@@ -32,6 +32,7 @@ test('persisted page restore remounts exactly one idle panel and preserves uncer
       window.localStorage.setItem('swarm-helper-uncertain-v1', `request-${cycle}`);
       window.dispatchEvent(new window.PageTransitionEvent('pagehide', { persisted: true }));
       assert.equal(host(), null);
+      assert.equal(window.document.getElementById('swarm-helper-incoming'), null);
       window.dispatchEvent(new window.PageTransitionEvent('pageshow', { persisted: true }));
       const root = await rendered();
       assert.notEqual(host(), previousHost);
@@ -44,6 +45,7 @@ test('persisted page restore remounts exactly one idle panel and preserves uncer
       window.dispatchEvent(new window.PageTransitionEvent('pageshow', { persisted: true }));
       assert.equal(host(), currentHost);
       assert.equal(window.document.querySelectorAll('#swarm-helper-root').length, 1);
+      assert.equal(window.document.querySelectorAll('#swarm-helper-incoming').length, 1);
     }
   } finally {
     window.dispatchEvent(new window.PageTransitionEvent('pagehide'));
