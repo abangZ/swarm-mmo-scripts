@@ -5,6 +5,7 @@ import { captureMargin, members, type Assignment, type ExpansionSettings } from 
 import type { Subscription, AutomationSession, Quote } from './types';
 import { validRoute, arriving, type Route } from '../features/expansion/cooperation';
 import { inZone, type ModeConfig } from '../features/commander/types';
+import { subscriptionBatches } from './subscription-batches';
 
 export function safeQuote(quote: ReturnType<AutomationSession['map']['quoteSend']>): { count: number; travelMs: number } | null {
   if (!quote || quote.outOfRange || quote.exact?.reason !== 'capture') return null;
@@ -18,6 +19,8 @@ export class GameWorld implements ExpansionWorld {
   private subscriptions = new Map<string, Subscription>();
   private quotes = new Map<string, Quote | null>();
   private scannedSources = new Set<bigint>();
+  private tileBatches: string[][] = [];
+  private ownerBatches: string[][] = [];
   private configs: ModeConfig[] = [];
   configure(configs: ModeConfig[]) { this.configs = configs; }
   needsScan() {
@@ -60,10 +63,10 @@ export class GameWorld implements ExpansionWorld {
         }
       }
       if (tiles.size > 2048) throw new Error('搜索区域过大，请缩小搜索半径后重新启动。');
-      const predicates = [...tiles.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, value]) => value);
+      const tileBatches = subscriptionBatches(this.tileBatches, tiles.keys());
       const queries: string[] = [];
-      for (let i = 0; i < predicates.length; i += 24) {
-        const where = predicates.slice(i, i + 24).join(' OR ');
+      for (const batch of tileBatches) {
+        const where = batch.map(key => tiles.get(key)!).join(' OR ');
         for (const table of ['planet', 'sun2', 'base']) queries.push(`SELECT * FROM ${table} WHERE ${where}`);
         queries.push(`SELECT * FROM swarm WHERE ${where.replaceAll('position_x', 'target_x').replaceAll('position_y', 'target_y')}`);
       }
@@ -73,8 +76,8 @@ export class GameWorld implements ExpansionWorld {
         if (error?.status === 'rejected') throw error.reason;
       }
       const owners = [...new Set([...this.session.conn.db.planet.iter()].filter(p => !this.configs.length || this.configs.some(c => inZone(p, c.policy.zone))).flatMap(p => p.ownerId ? [p.ownerId.toHexString()] : []))].sort();
-      for (let i = 0; i < owners.length; i += 24) {
-        const batch = owners.slice(i, i + 24);
+      const ownerBatches = subscriptionBatches(this.ownerBatches, owners);
+      for (const batch of ownerBatches) {
         if (batch.some(owner => !/^[0-9a-f]{64}$/i.test(owner))) throw new Error('玩家身份格式发生变化。');
         await add(`SELECT * FROM player WHERE ${batch.map(owner => `identity = x'${owner}'`).join(' OR ')}`);
       }
@@ -82,18 +85,22 @@ export class GameWorld implements ExpansionWorld {
       if (!alive()) throw new Error('扫描已停止。');
       for (const [query, sub] of this.subscriptions) if (!fresh.has(query)) sub.unsubscribe();
       this.subscriptions = fresh;
+      this.tileBatches = tileBatches; this.ownerBatches = ownerBatches;
       this.scannedSources = new Set(owned.map(p => p.planetId));
     } catch (error) {
       for (const sub of created) sub.unsubscribe();
       throw error;
     }
   }
-  read(): WorldSnapshot {
+  refreshQuotes(): void {
     assertSession(this.session);
     if (!this.subscriptions.size || [...this.subscriptions.values()].some(s => !s.isActive())) throw new Error('星球订阅已失效，请重新启动。');
     const current = getAutomationSession();
     this.session.map = current.map;
-    this.quotes.clear(); // Reuse route/native quotes only within this synchronous planning snapshot.
+    this.quotes.clear(); // A browser yield ends this synchronous quote-cache lifetime.
+  }
+  read(): WorldSnapshot {
+    this.refreshQuotes();
     const allOwned = ownedPlanets(this.session);
     const owned = allOwned.filter(p => this.scannedSources.has(p.planetId) || this.configs.some(c => c.policy.zone && inZone(p, c.policy.zone)));
     const budgets = new Map<bigint, number>();
@@ -158,5 +165,5 @@ export class GameWorld implements ExpansionWorld {
     assertSession(this.session);
     return this.session.conn.reducers.launchSwarm({ sourcePlanetId: source, targetPlanetId: target, probeCount: count });
   }
-  dispose() { for (const sub of this.subscriptions.values()) { try { sub.unsubscribe(); } catch { /* A disconnected subscription is already unusable. */ } } this.subscriptions.clear(); this.quotes.clear(); }
+  dispose() { for (const sub of this.subscriptions.values()) { try { sub.unsubscribe(); } catch { /* A disconnected subscription is already unusable. */ } } this.subscriptions.clear(); this.quotes.clear(); this.tileBatches = []; this.ownerBatches = []; }
 }

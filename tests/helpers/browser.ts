@@ -1,4 +1,4 @@
-import { afterEach, mock } from 'node:test';
+import { afterEach, beforeEach, mock } from 'node:test';
 import { JSDOM } from 'jsdom';
 
 const dom = new JSDOM('<body></body>', { url: 'https://www.swarm-mmo.com/play' });
@@ -11,6 +11,9 @@ const locks = { request: async (_name: string, _options: object, callback: (lock
 } };
 Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { locks } });
 const cleanups: (() => void | Promise<void>)[] = [];
+// Unit tests advance their own timers; host CPU contention must not create unplanned
+// cooperative yields. The planning tests explicitly advance this clock to test yields.
+beforeEach(() => { mock.method(performance, 'now', () => 0); });
 export function onCleanup(cleanup: () => void | Promise<void>): void { cleanups.push(cleanup); }
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();

@@ -79,3 +79,13 @@ test('waiting logs are deduplicated and history stays bounded across scans', asy
   assert.equal(latest.logs.at(-1)!.message, latest.expansion.phase);
   controller.stop(); t.mock.timers.tick(500); await settle(); controller.dispose();
 });
+
+test('saved attack intervals migrate to one second and cannot change the independent lane cadence', () => {
+  localStorage.setItem('swarm-helper-attack-settings', JSON.stringify({ scanMs: 10000, intervalMs: 2000, candidates: 10, radius: 32, horizonMs: 120000, maxTravelMs: 1800000, reserve: 0, maxSources: 1 }));
+  const controller = new AppController(() => fakeWorld().world);
+  assert.equal(controller.getSnapshot().attackSettings.intervalMs, '1');
+  controller.setAttackSetting('intervalMs', '2');
+  assert.equal(controller.getSnapshot().attackSettings.intervalMs, '1');
+  assert.equal(controller.getSnapshot().settings.intervalMs, '1.5');
+  controller.dispose();
+});

@@ -7,6 +7,8 @@ import type { ModeConfig } from '../commander/types';
 import { inZone } from '../commander/types';
 import { distance } from '../../shared/distance';
 import { PlanetIndex } from '../../shared/planet-index';
+import { bestCandidates } from '../../shared/best-candidates';
+import { finishPlanning } from '../../runtime/planning';
 
 /** Unknown/conflicting fleets remain locked. Only our known same-galaxy waves get deficit top-ups. */
 export function neutralRemaining(target: Planet, snapshot: WorldSnapshot, travelMs: number): number | null {
@@ -30,7 +32,11 @@ export function expansionQuote(world: ExpansionWorld, snapshot: WorldSnapshot, s
   return { sourceId: source.planetId, targetId: target.planetId, count, travelMs };
 }
 export interface SourceReport { sourceId: bigint; x: number; y: number; available: number; reason: string }
-export function expansionProposals(world: ExpansionWorld, snapshot: WorldSnapshot, config: ModeConfig, budgets: Map<bigint, number>, locked: Set<bigint>): { edges: Assignment[]; candidates: number; sources: SourceReport[]; readySources: number } {
+export interface ExpansionProposals { edges: Assignment[]; candidates: number; sources: SourceReport[]; readySources: number }
+export function expansionProposals(world: ExpansionWorld, snapshot: WorldSnapshot, config: ModeConfig, budgets: Map<bigint, number>, locked: Set<bigint>): ExpansionProposals {
+  return finishPlanning(expansionProposalSteps(world, snapshot, config, budgets, locked));
+}
+export function* expansionProposalSteps(world: ExpansionWorld, snapshot: WorldSnapshot, config: ModeConfig, budgets: Map<bigint, number>, locked: Set<bigint>): Generator<void, ExpansionProposals> {
   const { settings } = config;
   const neutrals = snapshot.planets.filter(p => p.ownerId == null && inZone(p, config.policy.zone));
   const targets = neutrals.filter(p => !locked.has(p.planetId) && neutralRemaining(p, snapshot, Infinity) !== null);
@@ -41,10 +47,28 @@ export function expansionProposals(world: ExpansionWorld, snapshot: WorldSnapsho
     return frontier.get(p.planetId)!;
   };
   const value = (p: Planet, travelMs: number) => (p.level ?? 1) * Math.max(0, settings.horizonMs - travelMs) / 60000 + opportunity(p) * 0.1;
+  const sources = snapshot.owned.filter(p => inZone(p, config.policy.zone));
+  // These three ranks do not depend on the source. Compute them once, preserving
+  // near()'s tie order, then filter by distance for each source. Only rank the union
+  // of eligible neighborhoods; unrelated cached map regions need no opportunity work.
+  const reachable = new Set<bigint>();
+  for (const source of sources) {
+    yield;
+    if ((budgets.get(source.planetId) ?? 0) > 0) for (const target of index.near(source, settings.radius)) reachable.add(target.planetId);
+  }
+  const ranked = index.ordered().filter(p => reachable.has(p.planetId));
+  for (const [i, target] of ranked.entries()) { opportunity(target); if (i % 16 === 0) yield; }
+  const staticOrders: Planet[][] = [];
+  for (const rank of [(p: Planet) => p.probeCount, (p: Planet) => -(p.level ?? 1) / (p.probeCount + 1 + captureMargin), (p: Planet) => -opportunity(p)]) {
+    staticOrders.push(bestCandidates(ranked, ranked.length, rank));
+    yield;
+  }
+  const squaredDistance = (a: Planet, b: Planet) => (a.positionX - b.positionX) ** 2 + (a.positionY - b.positionY) ** 2;
   const edges: Assignment[] = [], seen = new Set<bigint>();
   const reports: SourceReport[] = [];
   const groups = new Map<bigint, { target: Planet; sources: GroupSource[] }>();
-  for (const source of snapshot.owned.filter(p => inZone(p, config.policy.zone))) {
+  for (const source of sources) {
+    yield;
     const available = budgets.get(source.planetId) ?? 0;
     const report = { sourceId: source.planetId, x: source.positionX, y: source.positionY, available, reason: '单星兵力不足或报价不可用，暂时没有可行协同' };
     reports.push(report);
@@ -54,16 +78,20 @@ export function expansionProposals(world: ExpansionWorld, snapshot: WorldSnapsho
       report.reason = allIndex.near(source, settings.radius).length ? '范围内目标已在途或锁定，避免重复发射' : '搜索距离 / 战区内没有无主星';
       continue;
     }
+    const limit = Math.max(32, settings.candidates * 8);
+    // The first k entries of each stable ordering suffice to reproduce the same
+    // interleaved pool of k unique targets, including ties and candidate backfill.
     const orders = [
-      [...eligible].sort((a, b) => distance(source, a) - distance(source, b)),
-      [...eligible].sort((a, b) => a.probeCount - b.probeCount),
-      [...eligible].sort((a, b) => (b.level ?? 1) / (b.probeCount + 1 + captureMargin) - (a.level ?? 1) / (a.probeCount + 1 + captureMargin)),
-      [...eligible].sort((a, b) => opportunity(b) - opportunity(a)),
+      bestCandidates(eligible, limit, p => squaredDistance(source, p)),
+      ...staticOrders.map(order => {
+        const picked: Planet[] = [];
+        for (const p of order) if (squaredDistance(source, p) <= settings.radius ** 2) { picked.push(p); if (picked.length >= limit) break; }
+        return picked;
+      }),
     ];
     // Backfill n with feasible opportunities, rather than letting nearby unaffordable
     // or overly slow targets use all candidate slots. Bound native quote work per source.
     const pool = new Map<bigint, Planet>();
-    const limit = Math.max(32, settings.candidates * 8);
     for (let i = 0; pool.size < limit && i < eligible.length; i++) for (const order of orders) {
       if (order[i] && pool.size < limit) pool.set(order[i].planetId, order[i]);
     }
@@ -74,6 +102,7 @@ export function expansionProposals(world: ExpansionWorld, snapshot: WorldSnapsho
       evaluated.push({ target, quote, route: world.route?.(source.planetId, target.planetId) });
       if (quote && quote.count <= available) affordable++;
       if (affordable >= settings.candidates && evaluated.length >= settings.candidates * 2) break;
+      if (evaluated.length % 8 === 0) yield;
     }
     for (const { target } of evaluated) seen.add(target.planetId);
     const solos = evaluated.filter(e => e.quote && e.quote.count <= available).sort((a, b) => a.quote!.travelMs - b.quote!.travelMs || a.quote!.count - b.quote!.count);
@@ -97,12 +126,17 @@ export function expansionProposals(world: ExpansionWorld, snapshot: WorldSnapsho
     }
   }
   for (const { target, sources } of groups.values()) {
+    yield;
     const fastest = [...sources].sort((a, b) => a.travelMs - b.travelMs);
     const strongest = [...sources].sort((a, b) => b.available * (100 - b.lossPct) - a.available * (100 - a.lossPct));
     const picked = [...new Map([...fastest.slice(0, 3), ...strongest.slice(0, 3)].map(s => [s.planet.planetId, s])).values()];
     for (let size = 2; size <= settings.maxSources; size++) for (const group of combinations(picked, size)) edges.push(...coalitionOptions(target, group, { ...settings, horizonMs: settings.maxTravelMs }).map(job => ({ ...job, value: value(target, Math.max(job.travelMs, ...(job.support ?? []).map(m => m.travelMs))) })));
   }
-  const ready = new Set(edges.flatMap(job => members(job).map(m => m.sourceId)));
+  const ready = new Set<bigint>();
+  for (const [i, job] of edges.entries()) {
+    if (i % 128 === 0) yield;
+    for (const m of members(job)) ready.add(m.sourceId);
+  }
   for (const report of reports) if (ready.has(report.sourceId)) report.reason = '可出兵；当前目标优先分给更快来源或受剩余预算限制';
   return { edges, candidates: seen.size, sources: reports, readySources: ready.size };
 }

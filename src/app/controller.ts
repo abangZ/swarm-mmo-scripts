@@ -35,7 +35,7 @@ export class AppController {
     this.engine = new Commander((mode, state) => this.onUpdate(mode, state), createWorld);
     this.state = {
       expanded: false, mode: 'expansion', settingsOpen: true, attackSettingsOpen: true, uncertain: unresolved(),
-      settings: loadSettings(), attackSettings: { ...loadSettings(attackStorage), maxSources: '1' }, policies: loadPolicies(),
+      settings: loadSettings(), attackSettings: { ...loadSettings(attackStorage), maxSources: '1', intervalMs: '1' }, policies: loadPolicies(),
       previews: { expansion: { busy: false, message: '', enemies: [] }, attack: { busy: false, message: '', enemies: [] } },
       expansion: { ...this.engine.states.expansion }, attack: { ...this.engine.states.attack }, logs: [], reviewed: false, unlocking: false, unlockStatus: '',
     };
@@ -63,7 +63,7 @@ export class AppController {
   toggleSettings = (): void => { this.patch({ settingsOpen: !this.state.settingsOpen }); };
   toggleAttackSettings = (): void => { this.patch({ attackSettingsOpen: !this.state.attackSettingsOpen }); };
   setSetting = (key: keyof ExpansionSettings, value: string): void => { if (!this.state.expansion.running) this.patch({ settings: { ...this.state.settings, [key]: value } }); };
-  setAttackSetting = (key: keyof ExpansionSettings, value: string): void => { if (!this.state.attack.running) this.patch({ attackSettings: { ...this.state.attackSettings, [key]: value } }); };
+  setAttackSetting = (key: keyof ExpansionSettings, value: string): void => { if (key !== 'intervalMs' && !this.state.attack.running) this.patch({ attackSettings: { ...this.state.attackSettings, [key]: value } }); };
   setPolicy = (mode: Mode, key: keyof PolicyForm, value: string): void => {
     if (this.state[mode].running) return;
     this.patch({ policies: { ...this.state.policies, [mode]: { ...this.state.policies[mode], [key]: value } } });

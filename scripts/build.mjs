@@ -5,7 +5,7 @@ const banner = `// ==UserScript==
 // @name         Swarm MMO 助手
 // @namespace    swarm-mmo-scripts
 // @version      ${version}
-// @description  分区自动扩张与集结进攻，共享兵力预算、派兵队列与运行日志
+// @description  分区自动扩张与集结进攻，共享兵力预算、独立派兵队列与运行日志
 // @match        https://www.swarm-mmo.com/play*
 // @match        https://swarm-mmo.com/play*
 // @run-at       document-idle

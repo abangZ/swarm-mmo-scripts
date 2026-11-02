@@ -27,7 +27,7 @@ function army() {
 const pending = () => ({ count: 0, arrival: Date.now() });
 const guard = () => ({ percent: 0, deficit: 0 });
 
-test('long-range expansion alternates with bulk rally supplies without spending reserved donor stock', async t => {
+test('long-range expansion shares reserved donor stock with an independent rally queue', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
   const f = army();
   for (const id of [6000n, 6001n]) { const neutral = planet(id, 0, -1); neutral.probeCount = 5; f.snapshot.planets.push(neutral); }
@@ -49,7 +49,7 @@ test('long-range expansion alternates with bulk rally supplies without spending 
     spend(source, count); sent.push({ target, time: Date.now() });
   };
   f.world.launchGroup = async job => {
-    assert.equal(job.kind, 'reinforce'); assert.equal(members(job).length, 50);
+    assert.equal(job.kind, 'reinforce'); assert.ok(members(job).length >= 1 && members(job).length <= 50);
     for (const member of members(job)) spend(member.sourceId, member.count);
     sent.push({ target: job.targetId, time: Date.now() });
   };
@@ -59,8 +59,10 @@ test('long-range expansion alternates with bulk rally supplies without spending 
   await settle(); t.mock.timers.tick(250); await settle();
   for (let i = 0; i < 3; i++) { t.mock.timers.tick(1500); await settle(); }
   commander.stop(); t.mock.timers.tick(500); await run;
-  assert.deepEqual(sent.map(job => job.target), [6000n, 1n, 6001n, 1n]);
-  assert.deepEqual(sent.map(job => job.time), [100250, 101750, 103250, 104750]);
+  assert.deepEqual(sent.filter(job => job.target >= 6000n).map(job => job.target), [6000n, 6001n]);
+  const rallies = sent.filter(job => job.target === 1n);
+  assert.ok(rallies.length >= 2);
+  assert.ok(rallies.every((job, i) => !i || job.time - rallies[i - 1].time >= 1000));
   assert.equal(unresolved(), false);
 });
 
@@ -169,7 +171,7 @@ test('gathering rechecks every donor and hub ownership instead of sending a part
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
   for (const change of ['donor', 'hub', 'automation', 'incoming', 'funded']) {
     const f = army();
-    localStorage.setItem('swarm-helper-last-operation-v1', String(Date.now()));
+    localStorage.setItem('swarm-helper-last-attack-operation-v1', String(Date.now()));
     const commander = new Commander(() => {}, () => f.world);
     const run = commander.start('attack', f.config); await settle();
     const job = commander.states.attack.queue[0]; assert.equal(job.kind, 'reinforce');
@@ -266,13 +268,15 @@ test('a donor can fund both gathering and expansion with its unreserved remainde
   const f = army(); const donor = f.donors[0]; f.snapshot.budgets.set(donor.planetId, 10000);
   f.world.route = (source, target) => ({ travelMs: target === 1n ? 10000 : target === 2n && source !== 1n ? 200000 : 5000, lossPct: 0 });
   const neutral = planet(3n, 2, 0); neutral.probeCount = 0; neutral.level = 1; f.snapshot.planets.push(neutral);
+  const quote = f.world.quote;
+  f.world.quote = (source, target) => target === 3n && source !== donor.planetId ? null : quote(source, target);
   const commander = new Commander(() => {}, () => f.world);
   const run = commander.start('expansion', { ...f.config, policy: { ...f.config.policy, rallyId: null } });
   commander.start('attack', f.config); await settle(); t.mock.timers.tick(250); await settle();
   t.mock.timers.tick(1500); await settle();
   const calls = (f.world.launch as any).mock.calls.map((c: any) => c.arguments);
   assert.equal(calls.length, 2);
-  assert.deepEqual(calls.map((c: any[]) => [c[0], c[1]]), [[donor.planetId, 3n], [donor.planetId, 1n]]);
+  assert.deepEqual(calls.map((c: any[]) => [c[0], c[1]]), [[donor.planetId, 1n], [donor.planetId, 3n]]);
   assert.ok(calls.reduce((n: number, c: any[]) => n + c[2], 0) <= 10000);
   commander.stop(); t.mock.timers.tick(500); await run;
 });

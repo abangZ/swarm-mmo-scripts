@@ -25,23 +25,26 @@ function fixture(separate = true) {
   return { ...f, hostile, launches, commander, create };
 }
 
-test('separate regions run together through one executor, alternate ready work and stop independently', async t => {
+test('separate regions use independent intervals and stop independently', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
-  const f = fixture(); const second = planet(3n, 2, 0); f.snapshot.planets.push(second);
-  const run = f.commander.start('expansion', config());
-  f.commander.start('attack', config(100));
+  const f = fixture();
+  f.snapshot.planets.push(planet(3n, 2, 0));
+  for (const id of [10n, 11n]) { const target = planet(id, 102 + Number(id - 10n), 0); target.level = 1; target.ownerId = f.hostile.ownerId; f.snapshot.planets.push(target); }
+  const expansion = config(); expansion.settings.intervalMs = 2000;
+  const run = f.commander.start('expansion', expansion); f.commander.start('attack', config(100));
   await settle(); t.mock.timers.tick(250); await settle();
   assert.equal(f.create.mock.callCount(), 1);
-  assert.deepEqual(f.launches.map(l => [l.source, l.target]), [[1n, 2n]]);
-  t.mock.timers.tick(1500); await settle();
-  assert.deepEqual(f.launches.map(l => [l.source, l.target]), [[1n, 2n], [8n, 9n]]);
-  assert.ok(f.launches[1].time - f.launches[0].time >= 1500);
-  f.commander.stop('attack'); t.mock.timers.tick(1500); await settle();
-  assert.equal(f.commander.states.attack.running, false);
-  assert.equal(f.commander.states.expansion.running, true);
-  assert.equal(f.launches[2].target, 3n);
+  assert.equal(f.launches.filter(l => l.source === 1n).length, 1);
+  assert.equal(f.launches.filter(l => l.source === 8n).length, 1);
+  for (let i = 0; i < 8; i++) { t.mock.timers.tick(250); await settle(); }
+  const attackTimes = f.launches.filter(l => l.source === 8n).map(l => l.time);
+  const expansionTimes = f.launches.filter(l => l.source === 1n).map(l => l.time);
+  assert.deepEqual(attackTimes, [100250, 101250, 102250]);
+  assert.deepEqual(expansionTimes, [100250, 102250]);
+  f.commander.stop('attack'); await settle();
+  assert.equal(f.commander.states.attack.running, false); assert.equal(f.commander.states.expansion.running, true);
   assert.equal((f.world.dispose as any).mock.callCount(), 0);
-  f.commander.stop(); t.mock.timers.tick(500); await run;
+  f.commander.stop(); await run;
   assert.equal((f.world.dispose as any).mock.callCount(), 1);
   await withControl(async () => {});
 });
@@ -83,7 +86,7 @@ test('alliance changes and new incoming fleets cancel queued attacks before tran
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
   for (const change of ['ally', 'fleet', 'inventory']) {
     const f = fixture(false);
-    localStorage.setItem('swarm-helper-last-operation-v1', String(Date.now()));
+    localStorage.setItem('swarm-helper-last-attack-operation-v1', String(Date.now()));
     const run = f.commander.start('attack', config()); await settle();
     if (change === 'ally') f.snapshot.allies!.add(enemy);
     if (change === 'fleet') f.snapshot.fleets!.push({ id: 33n, owner: enemy, target: 9n, count: 50, arrival: 200000, arriving: 50 });
@@ -94,27 +97,29 @@ test('alliance changes and new incoming fleets cancel queued attacks before tran
   }
 });
 
-test('an uncertain launch stops both modes without executing the other queue', async t => {
+test('an uncertain launch stops further work in both lanes', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
   const f = fixture(); f.world.launch = mock.fn(async () => { throw new Error('unknown acknowledgement'); });
   const run = f.commander.start('expansion', config()); f.commander.start('attack', config(100));
   await settle(); t.mock.timers.tick(250); await run;
-  assert.equal((f.world.launch as any).mock.callCount(), 1);
+  assert.ok((f.world.launch as any).mock.callCount() <= 2);
   assert.equal(f.commander.states.expansion.activity, 'error'); assert.equal(f.commander.states.attack.activity, 'error');
   assert.equal(f.commander.states.expansion.running, false); assert.equal(f.commander.states.attack.running, false);
   assert.equal(unresolved(), true); assert.equal((f.world.dispose as any).mock.callCount(), 1);
 });
 
-test('adding a mode during a throttle invalidates the prepared task until joint intelligence is scanned', async t => {
+test('adding a mode cancels its stale peer task and requires joint coverage before either sends', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
   localStorage.setItem('swarm-helper-last-operation-v1', '100000');
   const f = fixture();
   const run = f.commander.start('expansion', config()); await settle();
-  f.commander.start('attack', config(100)); t.mock.timers.tick(1500); await settle();
-  assert.equal(f.launches.length, 0);
-  t.mock.timers.tick(1500); await settle();
-  assert.ok((f.world.scan as any).mock.callCount() >= 2); assert.equal(f.launches.length, 1);
-  f.commander.stop(); t.mock.timers.tick(500); await run;
+  let finishScan!: () => void;
+  f.world.scan = mock.fn(() => new Promise<void>(resolve => { finishScan = resolve; }));
+  f.commander.start('attack', config(100)); await settle();
+  t.mock.timers.tick(1500); await settle(); assert.equal(f.launches.length, 0);
+  finishScan(); await settle();
+  assert.equal(f.launches.length, 2);
+  f.commander.stop(); await run;
 });
 
 test('one planet can send multiple fleets to different attack targets while earlier fleets remain in flight', async t => {
@@ -135,7 +140,7 @@ test('one overlapping source can fund expansion and attack concurrently without 
   const run = f.commander.start('expansion', config()); f.commander.start('attack', config());
   await settle(); t.mock.timers.tick(250); await settle();
   t.mock.timers.tick(1500); await settle();
-  assert.deepEqual(f.launches.map(l => [l.source, l.target]), [[1n, 2n], [1n, 9n]]);
+  assert.deepEqual(f.launches.map(l => [l.source, l.target]), [[1n, 9n], [1n, 2n]]);
   assert.equal(f.commander.states.expansion.flights, 1);
   assert.equal(f.commander.states.attack.flights, 1);
   assert.ok(f.launches.reduce((n, l) => n + l.count, 0) <= 100);
@@ -156,7 +161,7 @@ test('attack retains arrival deadlines and longest-first scheduling independentl
   assert.deepEqual(plan.jobs!.map(job => job.targetId), [10n, 9n]);
 });
 
-test('long-range expansion and attack share refreshed stock, dynamic guards and the slower transmission interval', async t => {
+test('shared sources retain inventory barriers and dynamic guards with separate lane intervals', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
   const f = fixture(false); f.snapshot.budgets.set(1n, 62);
   f.snapshot.planets.push(planet(3n, 3, 0), planet(4n, 4, 0));
@@ -180,8 +185,9 @@ test('long-range expansion and attack share refreshed stock, dynamic guards and 
   await settle();
   for (let i = 0; i < 32; i++) { t.mock.timers.tick(250); await settle(); }
   f.commander.stop(); t.mock.timers.tick(500); await run;
-  assert.deepEqual(f.launches.map(job => job.target), [2n, 9n, 3n, 4n]);
-  assert.deepEqual(f.launches.map(job => job.time), [100250, 102250, 104250, 106250]);
+  assert.deepEqual(f.launches.map(job => job.target), [9n, 2n, 3n, 4n]);
+  assert.ok(f.launches.every((job, i) => !i || job.time - f.launches[i - 1].time >= 1000));
+  assert.ok(f.launches[1].time - f.launches[0].time < 2000, 'the old slower shared interval no longer applies');
   assert.equal(f.snapshot.budgets.get(1n), 17);
   assert.equal(unresolved(), false);
 });
@@ -191,7 +197,7 @@ test('stopping expansion during inventory sync preserves attack execution and th
   const f = fixture(false); f.snapshot.budgets.set(1n, 60);
   let completeSync!: () => void;
   f.world.syncInventory = mock.fn(() => new Promise<void>(resolve => { completeSync = resolve; }));
-  const run = f.commander.start('expansion', config()); f.commander.start('attack', config());
+  const run = f.commander.start('expansion', config()); await settle(); f.commander.start('attack', config());
   await settle(); t.mock.timers.tick(250); await settle();
   assert.equal(f.launches.length, 1);
   f.commander.stop('expansion'); t.mock.timers.tick(5000); await settle();
@@ -207,14 +213,14 @@ test('stopping expansion during inventory sync preserves attack execution and th
   assert.equal(unresolved(), false);
 });
 
-test('a confirmed expansion followed by inventory sync failure stops both modes without sending the reserved attack', async t => {
+test('a confirmed attack followed by inventory sync failure stops both modes before expansion can reuse the source', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
   const f = fixture(false);
   f.world.syncInventory = async () => { throw new Error('inventory barrier failed'); };
   const run = f.commander.start('expansion', config()); f.commander.start('attack', config());
   await settle(); t.mock.timers.tick(250); await run;
-  assert.deepEqual(f.launches.map(job => job.target), [2n]);
-  assert.equal(f.commander.states.expansion.sent, 1);
+  assert.deepEqual(f.launches.map(job => job.target), [9n]);
+  assert.equal(f.commander.states.attack.sent, 1);
   for (const mode of ['expansion', 'attack'] as const) {
     assert.equal(f.commander.states[mode].running, false);
     assert.equal(f.commander.states[mode].activity, 'error');
@@ -222,4 +228,87 @@ test('a confirmed expansion followed by inventory sync failure stops both modes 
   }
   assert.equal(unresolved(), false, 'the launch receipt is known even though inventory refresh failed');
   assert.equal((f.world.dispose as any).mock.callCount(), 1);
+});
+
+test('a slow expansion receipt does not delay the attack lane or release the cross-tab lock on stop', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  const f = fixture();
+  for (const id of [10n, 11n, 12n]) { const p = planet(id, 102 + Number(id - 10n), 0); p.level = 1; p.ownerId = f.hostile.ownerId; f.snapshot.planets.push(p); }
+  let acknowledge!: () => void;
+  f.world.launch = async (source, target, count) => {
+    f.launches.push({ source, target, count, time: Date.now() });
+    if (source === 1n) await new Promise<void>(resolve => { acknowledge = resolve; });
+  };
+  const run = f.commander.start('expansion', config()); f.commander.start('attack', config(100));
+  await settle();
+  for (let i = 0; i < 13; i++) { t.mock.timers.tick(250); await settle(); }
+  assert.deepEqual(f.launches.filter(l => l.source === 8n).map(l => l.time), [100250, 101250, 102250, 103250]);
+  assert.equal(f.launches.filter(l => l.source === 1n).length, 1);
+  assert.equal(unresolved(), false);
+  f.commander.stop(); await settle();
+  assert.equal((f.world.dispose as any).mock.callCount(), 0);
+  await assert.rejects(withControl(async () => {}), /正在运行/);
+  acknowledge(); await run;
+  assert.equal((f.world.dispose as any).mock.callCount(), 1);
+});
+
+test('periodic scans cannot free an unacknowledged source, and a refreshed cache is debited only once', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  const f = fixture(false); f.snapshot.budgets.set(1n, 60);
+  f.snapshot.planets.push(planet(3n, 3, 0), planet(4n, 4, 0));
+  let acknowledge!: () => void, synchronize!: () => void, firstSync = true;
+  f.world.launch = async (source, target, count) => {
+    f.launches.push({ source, target, count, time: Date.now() });
+    assert.ok(count <= f.snapshot.budgets.get(source)!);
+    f.snapshot.budgets.set(source, f.snapshot.budgets.get(source)! - count);
+    if (target === 9n) await new Promise<void>(resolve => { acknowledge = resolve; });
+  };
+  f.world.syncInventory = async () => { if (firstSync) { firstSync = false; await new Promise<void>(resolve => { synchronize = resolve; }); } };
+  const expansion = config(); expansion.settings.intervalMs = 1000;
+  const run = f.commander.start('expansion', expansion); f.commander.start('attack', config());
+  await settle(); t.mock.timers.tick(250); await settle();
+  t.mock.timers.tick(10000); await settle();
+  assert.equal(f.launches.length, 1); assert.ok((f.world.scan as any).mock.callCount() >= 2);
+  acknowledge(); await settle();
+  t.mock.timers.tick(1000); await settle(); assert.equal(f.launches.length, 1);
+  synchronize(); await settle();
+  for (let i = 0; i < 16; i++) { t.mock.timers.tick(250); await settle(); }
+  assert.deepEqual(f.launches.map(l => l.target), [9n, 2n, 3n, 4n]);
+  assert.equal(f.snapshot.budgets.get(1n), 0, 'all 36 remaining probes are usable after the 24-probe attack');
+  assert.equal(f.launches.reduce((n, l) => n + l.count, 0), 60);
+  f.commander.stop(); await run;
+});
+
+test('an unknown lane stops new sends while the other already-sent receipt retains ownership until it settles', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  const f = fixture();
+  let rejectAttack!: (error: Error) => void, acknowledgeExpansion!: () => void;
+  f.world.launch = (source, target, count) => {
+    f.launches.push({ source, target, count, time: Date.now() });
+    return source === 8n ? new Promise<void>((_resolve, reject) => { rejectAttack = reject; }) : new Promise<void>(resolve => { acknowledgeExpansion = resolve; });
+  };
+  const run = f.commander.start('expansion', config()); f.commander.start('attack', config(100));
+  await settle(); t.mock.timers.tick(250); await settle();
+  assert.equal(f.launches.length, 2);
+  rejectAttack(new Error('attack result unknown')); await settle();
+  t.mock.timers.tick(2000); await settle(); assert.equal(f.launches.length, 2);
+  assert.equal((f.world.dispose as any).mock.callCount(), 0);
+  await assert.rejects(withControl(async () => {}), /正在运行/);
+  acknowledgeExpansion(); await run;
+  assert.equal(unresolved(), true);
+  for (const mode of ['attack', 'expansion'] as const) { assert.equal(f.commander.states[mode].activity, 'error'); assert.equal(f.commander.states[mode].running, false); }
+  assert.equal((f.world.dispose as any).mock.callCount(), 1);
+});
+
+test('attack keeps its one-second cadence while expansion is still yielding through a large plan', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  let clock = 0; t.mock.method(performance, 'now', () => clock += 10);
+  const f = fixture();
+  for (let i = 0; i < 420; i++) { const p = planet(BigInt(1000 + i), i % 5, 2, true); f.snapshot.planets.push(p); f.snapshot.owned.push(p); f.snapshot.budgets.set(p.planetId, 100); }
+  for (const id of [10n, 11n, 12n]) { const p = planet(id, 102 + Number(id - 10n), 0); p.level = 1; p.ownerId = f.hostile.ownerId; f.snapshot.planets.push(p); }
+  const run = f.commander.start('expansion', config()); f.commander.start('attack', config(100)); await settle();
+  for (let i = 0; i < 13; i++) { t.mock.timers.tick(250); await settle(); }
+  assert.equal(f.commander.states.expansion.sent, 0, 'expansion has not completed its first sliced plan');
+  assert.deepEqual(f.launches.map(l => l.time), [100250, 101250, 102250, 103250]);
+  f.commander.stop(); t.mock.timers.tick(0); await run;
 });

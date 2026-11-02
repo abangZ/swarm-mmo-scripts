@@ -43,7 +43,7 @@ export function App({ controller }: { controller: AppController }) {
       </div>
       {state.uncertain && !state.expansion.running && !state.attack.running && <p className="notice error" role="alert">上次发射结果未知，已锁定操作。请在下方核对并恢复。</p>}
       {(state.expansion.running || state.attack.running) && <div className="shared-status">
-        <span>{state.expansion.running && state.attack.running ? '扩张与进攻同时运行' : state.expansion.running ? '自动扩张仍在运行' : '进攻模式仍在运行'} · 共用预算与队列</span>
+        <span>{state.expansion.running && state.attack.running ? '扩张与进攻同时运行' : state.expansion.running ? '自动扩张仍在运行' : '进攻模式仍在运行'} · 共享预算 · 独立队列</span>
         <button id="stop-all" onClick={controller.stopAll}>全部停止</button>
       </div>}
       {(['expansion', 'attack'] as const).map(mode => {

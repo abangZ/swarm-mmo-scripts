@@ -53,7 +53,7 @@ export function AutomationPanel({ mode, region, summary, state, settings, logs, 
     </dl>
     <ActivityLog prefix={prefix} entries={logs.filter(log => !log.mode || log.mode === mode)} />
     <div className="queue-card">
-      <div className="section-heading"><h3>待执行 <span className="count">{state.queue.length}</span></h3><span className="muted">{attack ? '集结 / 出击 · 共享预算' : state.exact ? '候选集最优方案' : '有界优化方案'}</span></div>
+      <div className="section-heading"><h3>待执行 <span className="count">{state.queue.length}</span></h3><span className="muted">{attack ? '集结 / 出击 · 1 秒独立队列' : state.exact ? '候选集最优方案' : '有界优化方案'}</span></div>
       {state.queue.length === 0 ? <p className="empty">{state.running ? '暂无排队任务，详见当前动作。' : '启动后根据兵力与附近目标生成计划。'}</p>
         : <ol id={`${prefix}auto-queue`} className="auto-queue" aria-label="派兵队列">
           {state.queue.slice(0, 5).map(job => <li key={String(job.targetId)}>

@@ -70,7 +70,7 @@ test('receipt and inventory synchronization consume the interval instead of addi
   const run = engine.start(defaults); await settle();
   for (let i = 0; i < 3; i++) { t.mock.timers.tick(500); await settle(); }
   assert.deepEqual(times, [100000, 101500]);
-  engine.stop(); t.mock.timers.tick(500); await run;
+  engine.stop(); t.mock.timers.tick(500); await settle(); t.mock.timers.tick(500); await run;
 });
 
 test('new sources request coverage immediately rather than waiting for the periodic scan', async t => {

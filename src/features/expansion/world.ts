@@ -31,6 +31,7 @@ export interface ExpansionWorld {
   scan(settings: ExpansionSettings, alive: () => boolean): Promise<void>;
   configure?(configs: ModeConfig[]): void;
   needsScan?(): boolean;
+  refreshQuotes?(): void;
   read(): WorldSnapshot;
   quote(source: bigint, target: bigint): { count: number; travelMs: number } | null;
   launch(source: bigint, target: bigint, count: number): Promise<void>;

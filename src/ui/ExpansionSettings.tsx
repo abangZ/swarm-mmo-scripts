@@ -22,10 +22,11 @@ export function ExpansionSettings({ value, disabled, onChange, attack = false }:
     <select id={id('scanMs')} disabled={disabled} value={value.scanMs} onChange={event => onChange('scanMs', event.target.value)}>
       {scanIntervals.map(ms => <option key={ms} value={ms / 1000}>{ms / 1000} 秒</option>)}
     </select>
-    {numericFields.map(({ key, label, ...bounds }) => <div key={key}>
+    {numericFields.filter(field => !attack || field.key !== 'intervalMs').map(({ key, label, ...bounds }) => <div key={key}>
       <label htmlFor={id(key)}>{key === 'horizonMs' && !attack ? '规划队列窗口（秒，不限制航行时间）' : label}</label>
       <input id={id(key)} type="number" {...bounds} disabled={disabled} value={value[key]} onChange={event => onChange(key, event.target.value)} />
     </div>)}
+    {attack && <p>进攻操作间隔固定为 1 秒，使用独立队列；等待本模式发射确认和库存同步后再执行下一项。</p>}
     {!attack && <>
       <label htmlFor="maxTravelMs">最长航行时间（秒，默认 1800＝30 分钟）</label>
       <input id="maxTravelMs" type="number" min={10} max={14400} step={1} disabled={disabled} value={value.maxTravelMs} onChange={event => onChange('maxTravelMs', event.target.value)} />
@@ -35,7 +36,7 @@ export function ExpansionSettings({ value, disabled, onChange, attack = false }:
     <select id="maxSources" disabled={disabled} value={value.maxSources} onChange={event => onChange('maxSources', event.target.value)}>
       <option value="1">1 颗（仅单星）</option><option value="2">2 颗</option><option value="3">3 颗</option>
     </select>
-    <p>协同来源彼此距离不超过 8，预计抵达时间相差不超过 15 秒。一次批量派兵，共用操作限速。</p></>}
-    <p>同时运行时共用队列，采用较慢的操作间隔与较快的扫描周期。</p>
+    <p>协同来源彼此距离不超过 8，预计抵达时间相差不超过 15 秒。一次批量派兵，计一次扩张队列操作。</p></>}
+    <p>两个模式使用独立队列和操作间隔，共享兵力预算；覆盖扫描采用较快的周期。</p>
   </>;
 }

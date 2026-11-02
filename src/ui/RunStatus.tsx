@@ -13,9 +13,8 @@ export function StatusBadge({ state, uncertain }: { state: ExpansionState; uncer
     : state.activity === 'paused' || state.activity === 'stopping' ? 'warning' : state.running ? 'active' : 'idle';
   return <span className={`status-badge ${tone}`}><span className="status-dot" />{statusLabel(state, uncertain)}</span>;
 }
-export function clockTime(time: number): string {
-  return new Date(time).toLocaleTimeString('zh-CN', { hour12: false });
-}
+const clockFormatter = new Intl.DateTimeFormat('zh-CN', { hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false });
+export function clockTime(time: number): string { return clockFormatter.format(time); }
 export function RunStatus({ state, uncertain, prefix = '' }: { state: ExpansionState; uncertain: boolean; prefix?: string }) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {

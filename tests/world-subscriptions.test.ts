@@ -63,7 +63,39 @@ test('native quote and route are reused within a snapshot but refreshed before t
   assert.equal(f.native.mock.callCount(), 1);
   f.world.read(); f.world.quote(1n, 2n);
   assert.equal(f.native.mock.callCount(), 2);
+  f.world.refreshQuotes(); f.world.quote(1n, 2n); f.world.route(1n, 2n);
+  assert.equal(f.native.mock.callCount(), 3, 'a resumed browser slice must use a new native quote cache');
   f.handles[0].unsubscribe();
   await assert.rejects(f.world.scan(defaults, () => true), /订阅已失效/);
   assert.throws(() => f.world.read(), /订阅已失效/);
+});
+
+test('420-source edge growth preserves full coverage batches instead of rechunking unchanged tiles', async t => {
+  const identity = '0'.repeat(64), owner = { toHexString: () => identity };
+  const owned = Array.from({ length: 420 }, (_, i) => {
+    const p = planet(BigInt(i + 1), (i % 30 - 15) * 8, (Math.floor(i / 30) - 7) * 8); p.ownerId = owner; return p;
+  });
+  const edge = planet(1000n, -151, 0), rows = [...owned, edge];
+  const f = fixture(rows), queries: string[] = [], builder = f.session.conn.subscriptionBuilder;
+  f.session.conn.subscriptionBuilder = () => {
+    const result = builder(), subscribe = result.subscribe.bind(result);
+    result.subscribe = query => { queries.push(query); return subscribe(query); }; return result;
+  };
+  Object.assign(f.session.conn.db, Object.fromEntries(['swarm', 'clan_member2', 'player_tech', 'sun2', 'base', 'attack_automation', 'upgrade_automation', 'player'].map(key => [key, { iter: () => [] }])));
+  const props = (document.querySelector('canvas') as any)['__reactFiber$fixture'].return.memoizedProps;
+  props.myIdentity = identity;
+  props.ref = { current: { quoteSend: () => null, listOwnedBodies: () => rows.filter(p => p.ownerId).map(p => ({ kind: 'planet', id: p.planetId, probes: 20 })) } };
+  const world = new GameWorld(), settings = { ...defaults, radius: 64 };
+  t.after(() => world.dispose()); world.configure([{ settings, policy: { ...defaultPolicy } }]);
+  await world.scan(settings, () => true);
+  const firstCount = f.handles.length;
+  assert.equal(firstCount, 27);
+  await world.scan(settings, () => true); assert.equal(f.handles.length, firstCount);
+  edge.ownerId = owner;
+  await world.scan(settings, () => true);
+  assert.equal(f.handles.length - firstCount, 8);
+  assert.equal(f.handles.slice(0, firstCount).filter(h => !h.isActive()).length, 4);
+  assert.equal(f.handles.filter(h => h.isActive()).length, 31);
+  assert.equal(world.read().owned.length, 421);
+  world.dispose(); assert.equal(f.handles.filter(h => h.isActive()).length, 0);
 });
