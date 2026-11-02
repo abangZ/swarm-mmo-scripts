@@ -29,6 +29,8 @@ h3 { font-size: 13px; font-weight: 600; }
 p { margin-top: 10px; color: #aebed2; font-size: 12px; }
 label { display: block; margin: 12px 0 5px; color: #c4d0e0; font-size: 12px; }
 select, input { width: 100%; }
+.strategy-toggle { display: flex; align-items: center; gap: 8px; }
+.strategy-toggle input { width: 16px; height: 16px; padding: 0; flex-shrink: 0; }
 strong { font-weight: 600; }
 .muted, small { color: #8ea3bc; font-size: 11px; }
 section, #toggle { box-shadow: 0 8px 32px #0009; border: 1px solid #354963; background: #0d1726f7; }

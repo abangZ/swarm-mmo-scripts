@@ -1,4 +1,4 @@
-import { completionMs, maxCoalitionSources, members, totalCount, type Assignment, type Plan } from './types';
+import { completionMs, jobKey, maxCoalitionSources, members, totalCount, type Assignment, type Plan } from './types';
 import { finishPlanning } from '../../runtime/planning';
 
 // All jobs have the same capture horizon: longest trips have the earliest launch deadlines.
@@ -20,23 +20,25 @@ function better(a: Assignment[], b: Assignment[], rapid = false): boolean {
 export function planExpansion(edges: Assignment[], budgets: Map<bigint, number>, interval: number, horizon: number, maxTravelMs?: number): Plan {
   return finishPlanning(expansionPlanSteps(edges, budgets, interval, horizon, maxTravelMs));
 }
-export function* expansionPlanSteps(edges: Assignment[], budgets: Map<bigint, number>, interval: number, horizon: number, maxTravelMs?: number): Generator<void, Plan> {
+export function* expansionPlanSteps(edges: Assignment[], budgets: Map<bigint, number>, interval: number, horizon: number, maxTravelMs?: number, initialDelay = 0): Generator<void, Plan> {
   // Both modes pass a journey cap and use an independent dispatch window.
   // Omitting the cap retains the legacy arrival-deadline API for existing callers.
   const rapid = maxTravelMs !== undefined;
+  const planningAt = Date.now();
   const order = (jobs: Assignment[]) => {
     if (!rapid) return schedule(jobs, interval, horizon);
     if ((jobs.length - 1) * interval > horizon) return null;
-    return [...jobs].sort((a, b) => completionMs(a) - completionMs(b) || (a.targetId < b.targetId ? -1 : 1));
+    const ordered = [...jobs].sort((a, b) => completionMs(a) - completionMs(b) || (a.targetId < b.targetId ? -1 : 1));
+    return ordered.every((job, i) => job.expiresAt === undefined || planningAt + initialDelay + i * interval + completionMs(job) + 5000 < job.expiresAt) ? ordered : null;
   };
-  const targets = new Map<bigint, Assignment[]>();
+  const targets = new Map<string, Assignment[]>();
   for (const [index, edge] of edges.entries()) {
     if (index % 128 === 0) yield;
     const contributions = members(edge);
     if (contributions.length > maxCoalitionSources || new Set(contributions.map(m => m.sourceId)).size !== contributions.length) continue;
     if (contributions.some(m => !Number.isSafeInteger(m.count) || m.count < 1 || !Number.isFinite(m.travelMs) || m.travelMs < 0 || m.travelMs > (maxTravelMs ?? horizon) || m.count > (budgets.get(m.sourceId) ?? 0))) continue;
-    const options = targets.get(edge.targetId) ?? [];
-    options.push(edge); targets.set(edge.targetId, options);
+    const options = targets.get(jobKey(edge)) ?? [];
+    options.push(edge); targets.set(jobKey(edge), options);
   }
   let groups = [...targets.values()];
   const pruned = groups.length > 128 || edges.length > 1000;

@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import type { Mode } from '../features/commander/types';
 import type { ExpansionState } from '../features/expansion/engine';
-import { sourceLabel, totalCount, completionMs, type ExpansionSettings as Settings } from '../features/expansion/types';
+import { jobKey, sourceLabel, targetLabel, totalCount, completionMs, type ExpansionSettings as Settings } from '../features/expansion/types';
 import type { SettingsForm } from '../app/settings';
 import type { ActivityLog as Log } from '../app/controller';
 import { ExpansionSettings } from './ExpansionSettings';
@@ -56,9 +56,9 @@ export function AutomationPanel({ mode, region, summary, state, settings, logs, 
       <div className="section-heading"><h3>待执行 <span className="count">{state.queue.length}</span></h3><span className="muted">{attack ? '集结 / 出击 · 1 秒独立队列' : state.exact ? '候选集最优方案' : '有界优化方案'}</span></div>
       {state.queue.length === 0 ? <p className="empty">{state.running ? '暂无排队任务，详见当前动作。' : '启动后根据兵力与附近目标生成计划。'}</p>
         : <ol id={`${prefix}auto-queue`} className="auto-queue" aria-label="派兵队列">
-          {state.queue.slice(0, 5).map(job => <li key={String(job.targetId)}>
-            <strong>{sourceLabel(job)} → #{String(job.targetId)}</strong>
-            <span>{totalCount(job)} 探针 · 航行约 {Math.ceil(completionMs(job) / 1000)} 秒{job.kind === 'reinforce' ? ' · 己方中转集结' : job.support?.length ? ' · 合兵' : ''}</span>
+          {state.queue.slice(0, 5).map(job => <li key={jobKey(job)}>
+            <strong>{sourceLabel(job)} → {targetLabel(job)}</strong>
+            <span>{job.kind === 'upgrade' ? `升至 ${(job.expectedLevel ?? 0) + 1} 级 · 预算上限 ${job.count} 探针` : `${totalCount(job)} 探针 · 航行约 ${Math.ceil(completionMs(job) / 1000)} 秒`}{job.kind === 'reinforce' ? ' · 己方中转集结' : job.kind === 'sun-supply' ? ' · 恒星补给' : job.support?.length ? ' · 合兵' : ''}</span>
           </li>)}
         </ol>}
       {state.queue.length > 5 && <p className="muted">另有 {state.queue.length - 5} 项，{attack ? '执行前会再次校验' : '按本轮计划依次执行'}。</p>}

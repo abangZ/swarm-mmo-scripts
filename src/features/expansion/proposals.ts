@@ -9,6 +9,7 @@ import { distance } from '../../shared/distance';
 import { PlanetIndex } from '../../shared/planet-index';
 import { bestCandidates } from '../../shared/best-candidates';
 import { finishPlanning } from '../../runtime/planning';
+import { riskEvaluator } from './strategy';
 
 /** Unknown/conflicting fleets remain locked. Only our known same-galaxy waves get deficit top-ups. */
 export function neutralRemaining(target: Planet, snapshot: WorldSnapshot, travelMs: number): number | null {
@@ -32,21 +33,25 @@ export function expansionQuote(world: ExpansionWorld, snapshot: WorldSnapshot, s
   return { sourceId: source.planetId, targetId: target.planetId, count, travelMs };
 }
 export interface SourceReport { sourceId: bigint; x: number; y: number; available: number; reason: string }
-export interface ExpansionProposals { edges: Assignment[]; candidates: number; sources: SourceReport[]; readySources: number }
+export interface ExpansionProposals { edges: Assignment[]; candidates: number; sources: SourceReport[]; readySources: number; exposed?: number }
 export function expansionProposals(world: ExpansionWorld, snapshot: WorldSnapshot, config: ModeConfig, budgets: Map<bigint, number>, locked: Set<bigint>): ExpansionProposals {
   return finishPlanning(expansionProposalSteps(world, snapshot, config, budgets, locked));
 }
 export function* expansionProposalSteps(world: ExpansionWorld, snapshot: WorldSnapshot, config: ModeConfig, budgets: Map<bigint, number>, locked: Set<bigint>): Generator<void, ExpansionProposals> {
   const { settings } = config;
   const neutrals = snapshot.planets.filter(p => p.ownerId == null && inZone(p, config.policy.zone));
-  const targets = neutrals.filter(p => !locked.has(p.planetId) && neutralRemaining(p, snapshot, Infinity) !== null);
+  const risk = riskEvaluator(snapshot, config);
+  const exposed = new Set<bigint>();
+  for (const [i, target] of neutrals.entries()) { if (risk(target) === 'exposed') exposed.add(target.planetId); if (i % 32 === 0) yield; }
+  const targets = neutrals.filter(p => !locked.has(p.planetId) && neutralRemaining(p, snapshot, Infinity) !== null
+    && (!settings.cautiousExpansion || !exposed.has(p.planetId)));
   const allIndex = new PlanetIndex(neutrals);
   const index = new PlanetIndex(targets), frontier = new Map<bigint, number>();
   const opportunity = (p: Planet) => {
     if (!frontier.has(p.planetId)) frontier.set(p.planetId, Math.min(10, index.near(p, Math.min(settings.radius, 8)).filter(q => q.planetId !== p.planetId && q.probeCount <= p.probeCount + 10).length));
     return frontier.get(p.planetId)!;
   };
-  const value = (p: Planet, travelMs: number) => (p.level ?? 1) * Math.max(0, settings.horizonMs - travelMs) / 60000 + opportunity(p) * 0.1;
+  const value = (p: Planet, travelMs: number) => (p.level ?? 1) * Math.max(0, settings.economicHorizonMs - travelMs) / 60000 + opportunity(p) * 0.1;
   const sources = snapshot.owned.filter(p => inZone(p, config.policy.zone));
   // These three ranks do not depend on the source. Compute them once, preserving
   // near()'s tie order, then filter by distance for each source. Only rank the union
@@ -75,7 +80,8 @@ export function* expansionProposalSteps(world: ExpansionWorld, snapshot: WorldSn
     if (available <= 0) { report.reason = '无可用兵力：已扣除留守、进攻预留及待同步的发射'; continue; }
     const eligible = index.near(source, settings.radius);
     if (!eligible.length) {
-      report.reason = allIndex.near(source, settings.radius).length ? '范围内目标已在途或锁定，避免重复发射' : '搜索距离 / 战区内没有无主星';
+      report.reason = settings.cautiousExpansion && allIndex.near(source, settings.radius).some(p => exposed.has(p.planetId)) ? '稳健扩张暂缓敌方更近、缺乏近邻支援的孤立目标'
+        : allIndex.near(source, settings.radius).length ? '范围内目标已在途或锁定，避免重复发射' : '搜索距离 / 战区内没有无主星';
       continue;
     }
     const limit = Math.max(32, settings.candidates * 8);
@@ -115,7 +121,8 @@ export function* expansionProposalSteps(world: ExpansionWorld, snapshot: WorldSn
     else if (!routes.length) report.reason = '当前没有有效原生报价 / 航线';
     if (evaluated.length < eligible.length) report.reason += `（本轮评估 ${evaluated.length}/${eligible.length} 个目标）`;
     for (const { target, quote, route } of picked) {
-      if (quote && quote.count <= available) edges.push({ ...quote, value: value(target, quote.travelMs) });
+      if (quote && quote.count <= available) edges.push({ ...quote, value: value(target, quote.travelMs),
+        reason: exposed.has(target.planetId) ? '快速铺开：接受前沿暴露，保持占点数优先' : '快速铺开：可执行的无主星球，优先占点数与短航程' });
       // Existing waves use the single-source deficit path; do not mix two coalition plans.
       if (settings.maxSources > 1 && world.launchGroup && world.supportsGroup?.() !== false && !snapshot.incoming.has(target.planetId) && !fleetsFor(snapshot, target.planetId).length) {
         if (validRoute(route) && route.travelMs <= settings.maxTravelMs) {
@@ -138,7 +145,7 @@ export function* expansionProposalSteps(world: ExpansionWorld, snapshot: WorldSn
     for (const m of members(job)) ready.add(m.sourceId);
   }
   for (const report of reports) if (ready.has(report.sourceId)) report.reason = '可出兵；当前目标优先分给更快来源或受剩余预算限制';
-  return { edges, candidates: seen.size, sources: reports, readySources: ready.size };
+  return { edges, candidates: seen.size, sources: reports, readySources: ready.size, exposed: exposed.size };
 }
 
 export function refreshGroup(world: ExpansionWorld, snapshot: WorldSnapshot, job: Assignment, budgets: Map<bigint, number>, settings: ExpansionSettings): Assignment | null {

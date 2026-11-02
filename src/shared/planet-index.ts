@@ -14,7 +14,7 @@ export class PlanetIndex {
     return [...this.cells.entries()].map(([key, planets]) => ({ cell: key.split(',').map(Number), planets }))
       .sort((a, b) => a.cell[0] - b.cell[0] || a.cell[1] - b.cell[1]).flatMap(entry => entry.planets);
   }
-  near(source: Planet, radius: number): Planet[] {
+  near(source: Pick<Planet, 'positionX' | 'positionY'>, radius: number): Planet[] {
     const result: Planet[] = [];
     for (let x = Math.floor((source.positionX - radius) / 32); x <= Math.floor((source.positionX + radius) / 32); x++) {
       for (let y = Math.floor((source.positionY - radius) / 32); y <= Math.floor((source.positionY + radius) / 32); y++) {

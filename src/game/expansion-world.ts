@@ -1,7 +1,7 @@
 import { assertSession, getAutomationSession, ownedPlanets } from './session';
 import { subscribe } from './subscriptions';
 import type { ExpansionWorld, WorldSnapshot, Fleet } from '../features/expansion/world';
-import { captureMargin, members, type Assignment, type ExpansionSettings } from '../features/expansion/types';
+import { captureMargin, members, targetKey, type Assignment, type ExpansionSettings, type TargetKind } from '../features/expansion/types';
 import type { Subscription, AutomationSession, Quote } from './types';
 import { validRoute, arriving, type Route } from '../features/expansion/cooperation';
 import { inZone, type ModeConfig } from '../features/commander/types';
@@ -45,6 +45,8 @@ export class GameWorld implements ExpansionWorld {
       if (!alive()) throw new Error('扫描已停止。');
     };
     try {
+      if (settings.captureMeteorites && !this.session.conn.db.meteorite) throw new Error('陨石情报接口不可用。');
+      if (settings.captureSuns && !this.session.conn.db.sun_swarm2) throw new Error('恒星舰队情报接口不可用。');
       await add(`SELECT * FROM planet WHERE owner_key = x'${identity}'`);
       await add(`SELECT * FROM swarm WHERE owner_id = x'${identity}'`);
       for (const table of ['clan_member2', 'player_tech']) await add(`SELECT * FROM ${table}`);
@@ -68,6 +70,8 @@ export class GameWorld implements ExpansionWorld {
       for (const batch of tileBatches) {
         const where = batch.map(key => tiles.get(key)!).join(' OR ');
         for (const table of ['planet', 'sun2', 'base']) queries.push(`SELECT * FROM ${table} WHERE ${where}`);
+        if (settings.captureMeteorites) queries.push(`SELECT * FROM meteorite WHERE ${where}`);
+        if (settings.captureSuns) queries.push(`SELECT * FROM sun_swarm2 WHERE ${where.replaceAll('position_x', 'target_x').replaceAll('position_y', 'target_y')}`);
         queries.push(`SELECT * FROM swarm WHERE ${where.replaceAll('position_x', 'target_x').replaceAll('position_y', 'target_y')}`);
       }
       for (let i = 0; i < queries.length; i += 3) {
@@ -128,14 +132,28 @@ export class GameWorld implements ExpansionWorld {
     });
     const fleetsByTarget = new Map<bigint, Fleet[]>();
     for (const fleet of fleets) { const group = fleetsByTarget.get(fleet.target) ?? []; group.push(fleet); fleetsByTarget.set(fleet.target, group); }
+    const bodyFleets = new Map<string, Fleet[]>();
+    const addBodyFleet = (id: bigint, kind: 'sun' | 'comet', row: { swarmId: bigint; ownerId: { toHexString(): string }; probeCount?: number; arrivalTime?: { toMillis(): number | bigint } }) => {
+      const key = targetKey(id, kind), group = bodyFleets.get(key) ?? [];
+      const time = Number(row.arrivalTime?.toMillis());
+      group.push({ id: row.swarmId, owner: row.ownerId.toHexString(), target: id, count: Number.isSafeInteger(row.probeCount) ? row.probeCount! : null,
+        arrival: Number.isFinite(time) ? time : null, arriving: null });
+      bodyFleets.set(key, group);
+    };
+    for (const row of db.swarm!.iter()) {
+      if (row.targetSunId && row.targetSunId > 0n) addBodyFleet(row.targetSunId, 'sun', row);
+      if (row.targetMeteoriteId && row.targetMeteoriteId > 0n) addBodyFleet(row.targetMeteoriteId, 'comet', row);
+    }
+    for (const row of db.sun_swarm2?.iter() ?? []) if (!row.targetBlackHole && row.targetSunId > 0n) addBodyFleet(row.targetSunId, 'sun', row);
     return { planets, owned, allOwned, budgets, incoming, fleets, fleetsByTarget, identity: this.session.identity, allies, intelligence: true,
+      suns: [...db.sun2.iter()], meteorites: [...(db.meteorite?.iter() ?? [])], bodyFleets,
       automated: new Set([...db.attack_automation.iter()].map(a => a.sourcePlanetId).concat([...db.upgrade_automation.iter()].map(a => a.planetId))),
       players: new Map([...(db.player?.iter() ?? [])].map(p => [p.identity.toHexString(), p.username])),
     };
   }
-  private nativeQuote(source: bigint, target: bigint): Quote | null {
-    const key = `${source}:${target}`;
-    if (!this.quotes.has(key)) this.quotes.set(key, this.session.map.quoteSend('planet', source, 'planet', target));
+  private nativeQuote(source: bigint, target: bigint, kind: TargetKind = 'planet'): Quote | null {
+    const key = `${source}:${targetKey(target, kind)}`;
+    if (!this.quotes.has(key)) this.quotes.set(key, this.session.map.quoteSend('planet', source, kind, target));
     return this.quotes.get(key)!;
   }
   quote(source: bigint, target: bigint) { return safeQuote(this.nativeQuote(source, target)); }
@@ -151,6 +169,31 @@ export class GameWorld implements ExpansionWorld {
     return this.session.conn.reducers.launchSwarmBulk!({ kind: 0, targetId: job.targetId, launches: members(job).map(m => ({ sourceId: m.sourceId, probeCount: m.count })) });
   }
   supportsGroup() { return typeof this.session.conn.reducers.launchSwarmBulk === 'function'; }
+  quoteBody(source: bigint, target: bigint, kind: 'sun' | 'comet') {
+    const quote = this.nativeQuote(source, target, kind);
+    if (kind === 'comet') return safeQuote(quote);
+    // A sun fights in whole super-probes. The native exact send already includes
+    // the winning super-probe, Conversion and border loss; +1 raw probe is trimmed.
+    if (!quote || !validRoute(quote) || quote.outOfRange || quote.exact?.reason !== 'capture'
+      || !Number.isSafeInteger(quote.exact.probes) || quote.exact.probes < 1 || quote.exact.probes > 0xffffffff) return null;
+    return { count: quote.exact.probes, travelMs: quote.travelMs };
+  }
+  routeBody(source: bigint, target: bigint, kind: 'sun' | 'comet'): Route | null {
+    const quote = this.nativeQuote(source, target, kind);
+    return validRoute(quote) ? { travelMs: quote.travelMs, lossPct: quote.lossPct } : null;
+  }
+  launchBody(job: Assignment): Promise<void> {
+    assertSession(this.session);
+    const reducers = this.session.conn.reducers;
+    if (job.targetKind === 'sun' && reducers.launchSwarmAtSun) return reducers.launchSwarmAtSun({ sourcePlanetId: job.sourceId, targetSunId: job.targetId, probeCount: job.count });
+    if (job.targetKind === 'comet' && reducers.launchSwarmAtMeteorite) return reducers.launchSwarmAtMeteorite({ sourcePlanetId: job.sourceId, targetMeteoriteId: job.targetId, probeCount: job.count });
+    throw new Error('目标的原生派兵接口不可用，未发射。');
+  }
+  upgrade(planetId: bigint): Promise<void> {
+    assertSession(this.session);
+    if (!this.session.conn.reducers.upgradePlanet) throw new Error('原生升级接口不可用。');
+    return this.session.conn.reducers.upgradePlanet({ planetId });
+  }
   async syncInventory(sources: bigint[]): Promise<void> {
     assertSession(this.session);
     const ids = [...new Set(sources)];

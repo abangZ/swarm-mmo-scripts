@@ -36,7 +36,7 @@ export class AppController {
     this.engine = new Commander((mode, state) => this.onUpdate(mode, state), createWorld);
     this.state = {
       expanded: false, mode: 'expansion', settingsOpen: true, attackSettingsOpen: true, uncertain: unresolved(),
-      settings: loadSettings(), attackSettings: { ...loadSettings(attackStorage), maxSources: '1', intervalMs: '1' }, policies: loadPolicies(),
+      settings: loadSettings(), attackSettings: { ...loadSettings(attackStorage), maxSources: '1', intervalMs: '1', captureSuns: '0', captureMeteorites: '0', upgradeStable: '0' }, policies: loadPolicies(),
       previews: { expansion: { busy: false, message: '', enemies: [] }, attack: { busy: false, message: '', enemies: [] } },
       expansion: { ...this.engine.states.expansion }, attack: { ...this.engine.states.attack }, logs: [], reviewed: false, unlocking: false, unlockStatus: '',
     };

@@ -1,7 +1,7 @@
 import { dispatch, dispatchExpansion, expansionInterval, unresolved, withControl, within } from '../../runtime/operations';
 import type { ExpansionWorld, WorldSnapshot } from '../expansion/world';
-import { fleetsFor } from '../expansion/world';
-import { completionMs, members, sourceLabel, totalCount, validateSettings, type Assignment } from '../expansion/types';
+import { bodyFleetsFor, bodyFor } from '../expansion/world';
+import { completionMs, jobKey, members, planetLocks, sourceLabel, targetLabel, totalCount, validateSettings, type Assignment } from '../expansion/types';
 import type { ExpansionActivity, ExpansionState } from '../expansion/engine';
 import { expansionProposalSteps } from '../expansion/proposals';
 import { expansionPlanSteps } from '../expansion/planner';
@@ -10,13 +10,16 @@ import { attackStartupIssue } from '../attack/diagnostics';
 import { attackQuote } from '../attack/planner';
 import { OffensivePlanner, type Supply } from '../attack/rally';
 import { arriving } from '../expansion/cooperation';
-import { availableBudgets, reserveFor } from './safety';
+import { availableBudgets, hostile, reserveFor } from './safety';
+import { distance } from '../../shared/distance';
 import { inZone, validatePolicy, type Mode, type ModeConfig } from './types';
+import { meteoriteProposals, SunPlanner } from '../expansion/special-targets';
+import { decisionLabel, ExpansionJournal, StableUpgrades, validSpecialTarget } from '../expansion/strategy';
 
 export const idleState = (): ExpansionState => ({ activity: 'idle', ownedCount: 0, candidateCount: 0, lastScanAt: null, nextScanAt: null, running: false, phase: '尚未启动', queue: [], flights: 0, sent: 0, captured: 0, missed: 0, exact: false });
 const modes: Mode[] = ['expansion', 'attack'];
 interface Flight { mode: Mode; job: Assignment; due: number }
-const fleetState = (snapshot: WorldSnapshot, target: bigint) => [snapshot.incoming.has(target), ...fleetsFor(snapshot, target)
+const fleetState = (snapshot: WorldSnapshot, job: Assignment) => [(job.targetKind ?? 'planet') === 'planet' && snapshot.incoming.has(job.targetId), ...bodyFleetsFor(snapshot, job.targetId, job.targetKind)
   .map(f => [f.id, f.owner, f.count, f.arriving, f.arrival].join(':')).sort()].join('|');
 
 /** One inventory ledger and scan coordinator; each mode owns its planning/execution lane. */
@@ -29,21 +32,21 @@ export class Commander {
   private revision = 0;
   private nextScan = 0;
   private scanPlans = new Set<Mode>();
-  private expansionFleets = new Map<bigint, string>();
+  private expansionFleets = new Map<string, string>();
   private nextPlan: Record<Mode, number> = { expansion: 0, attack: 0 };
   private tasks = new Map<Mode, Promise<void>>();
   private cancellations = new Map<Mode, AbortController>();
   private wake?: () => void;
   private pendingSources = new Set<bigint>();
   private inventoryRevision = 0;
-  private pendingTargets = new Set<bigint>();
+  private pendingTargets = new Set<string>();
   private attackReservations = new Map<bigint, number>();
   private coveredRevision = -1;
   private scanning = false;
   private failure?: Error;
   private reconnectAt: number | null = null;
   private identity?: string;
-  private flights = new Map<bigint, Flight>();
+  private flights = new Map<string, Flight>();
   private debits = new Map<bigint, number>();
   private expansionStock = new Map<bigint, number>();
   private expansionPending = new Map<bigint, number>();
@@ -55,6 +58,10 @@ export class Commander {
   private saving?: { key: string; until: number };
   private savingCooldown = 0;
   private offensive = new OffensivePlanner();
+  private sunPlanner = new SunPlanner();
+  private sunReservations = new Map<bigint, number>();
+  private upgrades = new StableUpgrades();
+  private journal = new ExpansionJournal();
   private supplies: { hub: bigint; deliveries: Supply[] }[] = [];
   constructor(private update: (mode: Mode, state: ExpansionState) => void, private createWorld: () => ExpansionWorld) {}
   private emit(mode: Mode, phase?: string, activity?: ExpansionActivity) {
@@ -74,10 +81,10 @@ export class Commander {
   private activeConfigs() { return modes.flatMap(mode => this.configs[mode] ? [this.configs[mode]!] : []); }
   start(mode: Mode, config: ModeConfig): Promise<void> {
     if (this.states[mode].running || this.working && !this.active) return this.run ?? Promise.resolve();
-    if (mode === 'attack') config = { ...config, settings: { ...config.settings, intervalMs: 1000 } };
+    if (mode === 'attack') config = { ...config, settings: { ...config.settings, intervalMs: 1000, captureSuns: 0, captureMeteorites: 0, upgradeStable: 0 } };
     validateSettings(config.settings); validatePolicy(config.policy, mode);
     if (mode === 'attack') this.offensive.reset();
-    else this.expansionDelay = 0;
+    else { this.expansionDelay = 0; this.upgrades.reset(); this.journal = new ExpansionJournal(); }
     this.configs[mode] = structuredClone(config);
     this.states[mode] = { ...idleState(), running: true };
     this.revision++; this.nextScan = 0; this.nextPlan = { expansion: 0, attack: 0 }; this.interruptWaiting();
@@ -89,6 +96,7 @@ export class Commander {
     for (const m of mode ? [mode] : modes) {
       delete this.configs[m];
       this.states[m].queue = [];
+      if (m === 'expansion') { this.sunReservations.clear(); this.upgrades.reset(); }
       if (m === 'attack') { this.attackReservations.clear(); this.saving = undefined; this.savingCooldown = 0; this.offensive.reset(); this.states.attack.rally = undefined; this.states.attack.rallies = undefined; }
       if (this.states[m].running) this.emit(m, '正在停止；已发射舰队仍继续航行', 'stopping');
     }
@@ -112,6 +120,7 @@ export class Commander {
     if (this.configs.attack) this.stop('attack');
     this.revision++; this.nextScan = 0; this.scanPlans.clear(); this.interruptWaiting();
     this.states.expansion.queue = []; this.states.expansion.nextScanAt = null;
+    this.sunReservations.clear(); this.upgrades.reset();
     this.reconnectAt = Date.now() + 5000;
     this.emit('expansion', `连接或情报暂不可用，5 秒后自动尝试恢复：${error instanceof Error ? error.message : String(error)}`, 'paused');
   }
@@ -153,6 +162,7 @@ export class Commander {
       this.reconnectAt = null; this.identity = undefined;
       this.saving = undefined; this.debits.clear(); this.pendingSources.clear(); this.pendingTargets.clear(); this.attackReservations.clear();
       this.expansionStock.clear(); this.expansionPending.clear(); this.inventoryDirty.clear(); this.expansionFleets.clear();
+      this.sunReservations.clear(); this.upgrades.reset();
       for (const mode of modes) if (this.states[mode].running) {
         this.states[mode].running = false; this.states[mode].queue = []; this.states[mode].nextScanAt = null; this.emit(mode);
       }
@@ -180,15 +190,22 @@ export class Commander {
     const owned = new Set((snapshot.allOwned ?? snapshot.owned).map(p => p.planetId));
     for (const [id, flight] of this.flights) {
       const state = this.states[flight.mode];
-      if (owned.has(id)) {
+      const job = flight.job;
+      const captured = !job.targetKind || job.targetKind === 'planet' ? owned.has(job.targetId)
+        : !!snapshot.identity && bodyFor(snapshot, job.targetId, job.targetKind)?.ownerId?.toHexString() === snapshot.identity;
+      if (captured) {
         state.captured++; this.flights.delete(id); this.inventoryRevision++;
-        if (flight.mode === 'attack' && this.configs.attack) this.offensive.captured(id, this.configs.attack);
-        if (this.configs[flight.mode]) this.emit(flight.mode, `已确认占领 #${id}`, 'captured');
-      } else if (Date.now() >= flight.due + 5000 && !snapshot.incoming.has(id)) {
+        if (flight.mode === 'expansion') this.journal.captured(job, snapshot);
+        if (flight.mode === 'attack' && this.configs.attack) this.offensive.captured(job.targetId, this.configs.attack);
+        if (this.configs[flight.mode]) this.emit(flight.mode, `已确认占领${targetLabel(job)}`, 'captured');
+      } else if (Date.now() >= flight.due + 5000 && !bodyFleetsFor(snapshot, job.targetId, job.targetKind).length
+        && (job.targetKind && job.targetKind !== 'planet' || !snapshot.incoming.has(job.targetId))) {
         state.missed++; this.flights.delete(id); this.inventoryRevision++;
-        if (this.configs[flight.mode]) this.emit(flight.mode, `舰队已结束航行，未确认占领 #${id}；重新评估`, 'waiting');
+        if (this.configs[flight.mode]) this.emit(flight.mode, `舰队已结束航行，未确认占领${targetLabel(job)}；重新评估`, 'waiting');
       }
     }
+    this.journal.observe(snapshot); this.states.expansion.metrics = this.journal.snapshot();
+    if (this.configs.expansion) this.upgrades.observe(snapshot, this.configs.expansion);
   }
   private pendingSupply(hub: bigint): Supply {
     // Track each route separately: part of a batch may already be in the hub's stock.
@@ -197,7 +214,7 @@ export class Commander {
     const pending = this.supplies.filter(s => s.hub === hub).flatMap(s => s.deliveries).filter(s => s.arrival > Date.now());
     return { count: pending.reduce((n, s) => n + s.count, 0), arrival: Math.max(Date.now(), ...pending.map(s => s.arrival)) };
   }
-  private flightCount(mode: Mode) { return [...this.flights.values()].filter(f => f.mode === mode).length + (mode === 'attack' ? this.supplies.length : 0); }
+  private flightCount(mode: Mode) { return [...this.flights.values()].filter(f => f.mode === mode).length + (mode === 'attack' ? this.supplies.length : this.sunPlanner.gathering ? 1 : 0); }
   private planned(mode: Mode) {
     if (!this.scanPlans.delete(mode) || this.scanPlans.size) return;
     // Coverage and planning form one scan round. Receipts and draining its queue
@@ -273,11 +290,13 @@ export class Commander {
     }
     const snapshot = world.read(), configs = this.activeConfigs();
     const budgets = this.budgets(snapshot);
-    const locked = new Set([...this.flights.keys(), ...this.pendingTargets]);
+    const bodyLocked = new Set([...this.flights.keys(), ...this.pendingTargets]);
+    const locked = planetLocks(bodyLocked);
     const interval = config.settings.intervalMs;
     let attack: Assignment | undefined;
     const attackConfig = mode === 'attack' ? config : undefined;
     if (attackConfig) {
+      for (const [id, count] of this.sunReservations) budgets.set(id, Math.max(0, (budgets.get(id) ?? 0) - count));
       const reserved = new Map<bigint, number>();
       const draft = this.offensive.fork();
       const plan = await runPlanning(draft.steps(world, snapshot, attackConfig, budgets, locked, hub => this.pendingSupply(hub), hub => ({
@@ -308,19 +327,46 @@ export class Commander {
     const expansionConfig = mode === 'expansion' ? config : undefined;
     let expansion: Assignment | undefined;
     if (expansionConfig) {
+      // Ordinary expansion retains its fast queued plans and checks live budgets
+      // at dispatch. Only a draft publishing shared sun reservations needs an
+      // unchanged inventory version; unrelated attack receipts must not starve it.
+      let publishesReservations = this.sunReservations.size > 0;
+      const planningCurrent = () => current() && (!publishesReservations || inventoryRevision === this.inventoryRevision);
       const left = new Map(budgets);
       for (const [id, count] of this.attackReservations) left.set(id, Math.max(0, (left.get(id) ?? 0) - count));
-      const proposals = await runPlanning(expansionProposalSteps(world, snapshot, expansionConfig, left, locked), current, () => world.refreshQuotes?.());
-      if (!proposals || !current()) return;
-      const plan = await runPlanning(expansionPlanSteps(proposals.edges, left, interval, expansionConfig.settings.horizonMs, expansionConfig.settings.maxTravelMs), current);
-      if (!plan || !current()) return;
+      const sunDraft = this.sunPlanner.fork();
+      const sun = await runPlanning(sunDraft.steps(world, snapshot, config, left, bodyLocked, hub => Math.max(0,
+        ...configs.filter(c => inZone(hub, c.policy.zone) && snapshot.planets.some(p => hostile(p, snapshot) && distance(p, hub) <= c.policy.threatRadius)).map(c => c.policy.frontlinePercent))), planningCurrent, () => world.refreshQuotes?.());
+      publishesReservations ||= !!sun?.reservations.size;
+      if (!sun || !planningCurrent()) return;
+      for (const [id, count] of sun.reservations) left.set(id, Math.max(0, (left.get(id) ?? 0) - count));
+      const proposals = await runPlanning(expansionProposalSteps(world, snapshot, expansionConfig, left, locked), planningCurrent, () => world.refreshQuotes?.());
+      if (!proposals || !planningCurrent()) return;
+      const meteorites = await runPlanning(meteoriteProposals(world, snapshot, config, left, bodyLocked), planningCurrent, () => world.refreshQuotes?.());
+      if (!meteorites || !planningCurrent()) return;
+      const plan = await runPlanning(expansionPlanSteps([...proposals.edges, ...meteorites], left, interval,
+        Math.max(0, expansionConfig.settings.horizonMs - (sun.job ? interval : 0)), expansionConfig.settings.maxTravelMs, sun.job ? interval : 0), planningCurrent);
+      if (!plan || !planningCurrent()) return;
+      const captures = [...(sun.job ? [sun.job] : []), ...plan.jobs];
+      const protectedSources = new Set([...this.attackReservations.keys(), ...sun.reservations.keys(), ...captures.flatMap(job => members(job).map(m => m.sourceId))]);
+      let maintenance = world.upgrade ? await runPlanning(this.upgrades.steps(snapshot, config, left, protectedSources), planningCurrent) : [];
+      if (!maintenance || !planningCurrent()) return;
+      if (inventoryRevision !== this.inventoryRevision) maintenance = [];
+      this.sunPlanner = sunDraft;
+      if (sun.reservations.size !== this.sunReservations.size || [...sun.reservations].some(([id, n]) => n !== this.sunReservations.get(id))) this.inventoryRevision++;
+      this.sunReservations = sun.reservations;
+      const jobs = [...captures, ...maintenance].slice(0, Math.floor(config.settings.horizonMs / interval) + 1);
       const assigned = new Set(plan.jobs.flatMap(job => members(job).map(m => m.sourceId)));
+      for (const job of jobs) for (const member of members(job)) assigned.add(member.sourceId);
       const idle = proposals.sources.filter(source => !assigned.has(source.sourceId)).sort((a, b) => b.available - a.available).slice(0, 6);
       this.states.expansion.planning = { sources: proposals.sources.length, ready: proposals.readySources, assigned: assigned.size, idle };
-      this.states.expansion.queue = plan.jobs; this.states.expansion.exact = plan.exact; this.states.expansion.candidateCount = proposals.candidates;
-      this.expansionFleets = new Map(plan.jobs.map(job => [job.targetId, fleetState(snapshot, job.targetId)]));
-      expansion = plan.jobs[0];
-      if (!expansion) this.emit('expansion', `暂无可执行扩张：${proposals.readySources}/${proposals.sources.length} 颗来源可出兵；${idle[0]?.reason ?? '战区内暂无己方来源'}`, 'waiting');
+      this.states.expansion.queue = jobs; this.states.expansion.exact = plan.exact && !sun.job && !maintenance.length; this.states.expansion.candidateCount = proposals.candidates + new Set(meteorites.map(job => job.targetId)).size + (sun.sun ? 1 : 0);
+      this.states.expansion.decisions = jobs.slice(0, 5).map(decisionLabel);
+      this.states.expansion.exposed = proposals.exposed;
+      this.states.expansion.sun = sun.sun !== undefined ? { target: sun.sun, hub: sun.hub, waiting: sun.waiting } : undefined;
+      this.expansionFleets = new Map(jobs.map(job => [jobKey(job), fleetState(snapshot, job)]));
+      expansion = jobs[0];
+      if (!expansion) this.emit('expansion', sun.waiting ?? `暂无可执行扩张：${proposals.readySources}/${proposals.sources.length} 颗来源可出兵；${idle[0]?.reason ?? '战区内暂无己方来源'}`, 'waiting');
     }
     if (!current()) return;
     this.planned(mode);
@@ -333,38 +379,62 @@ export class Commander {
   private async executeJob(mode: Mode, config: ModeConfig, signal: AbortSignal, current: () => boolean, job: Assignment) {
     const world = this.world!;
     const dispatchRevision = this.revision;
-    this.emit(mode, `准备${job.kind === 'reinforce' ? '集结 ' : ' '}${sourceLabel(job)} → #${job.targetId}，共 ${totalCount(job)} 探针；等待操作间隔`, 'queued');
+    this.emit(mode, `准备${job.kind === 'upgrade' ? '升级 ' : job.kind ? '集结 ' : ' '}${sourceLabel(job)} → ${targetLabel(job)}，共 ${totalCount(job)} 探针；等待操作间隔`, 'queued');
     if (mode === 'expansion') {
       this.expansionDelay ||= expansionInterval(config.settings.intervalMs);
+      let submitted = false;
       try {
         await dispatchExpansion(() => {
           const fresh = world.read();
-          if (!current() || this.scanning || this.coveredRevision !== dispatchRevision || this.flights.has(job.targetId) || this.pendingTargets.has(job.targetId)) return null;
-          const target = fresh.planets.find(p => p.planetId === job.targetId);
-          if (!target || target.ownerId != null || !inZone(target, config.policy.zone) || this.expansionFleets.get(job.targetId) !== fleetState(fresh, job.targetId)) return null;
-          const contributions = members(job), available = this.budgets(fresh, new Set(contributions.map(m => m.sourceId)));
+          if (!current() || this.scanning || this.coveredRevision !== dispatchRevision || this.flights.has(jobKey(job)) || this.pendingTargets.has(jobKey(job))) return null;
+          const target = bodyFor(fresh, job.targetId, job.targetKind);
+          if (!target || !inZone(target, config.policy.zone) || this.expansionFleets.get(jobKey(job)) !== fleetState(fresh, job)) return null;
+          if (job.kind === 'sun-supply') { if (!this.sunPlanner.validSupply(job, fresh, config)) return null; }
+          else if (job.kind === 'upgrade') {
+            this.upgrades.observe(fresh, config);
+            const source = fresh.owned.find(p => p.planetId === job.sourceId);
+            if (!source || source.level !== job.expectedLevel || this.attackReservations.has(job.sourceId) || this.sunReservations.has(job.sourceId) || !this.upgrades.eligible(source, fresh, config)) return null;
+          } else if (job.targetKind && job.targetKind !== 'planet') { if (!validSpecialTarget(job, fresh, config)) return null; }
+          else if (target.ownerId != null) return null;
+          const contributions = members(job), sourceIds = new Set(contributions.map(m => m.sourceId));
+          if (job.kind === 'sun-supply') sourceIds.add(job.targetId);
+          const available = this.budgets(fresh, sourceIds);
+          if (job.kind === 'sun-supply' && (available.get(job.targetId) ?? 0) - (this.attackReservations.get(job.targetId) ?? 0) < (job.hubBudget ?? 0)) return null;
           if (contributions.some(m => !fresh.owned.some(p => p.planetId === m.sourceId && inZone(p, config.policy.zone))
-            || m.count > Math.max(0, (available.get(m.sourceId) ?? 0) - (this.attackReservations.get(m.sourceId) ?? 0)))) return null;
+            || m.count > Math.max(0, (available.get(m.sourceId) ?? 0) - (this.attackReservations.get(m.sourceId) ?? 0)
+              - (job.kind === 'sun-supply' || job.targetKind === 'sun' ? 0 : this.sunReservations.get(m.sourceId) ?? 0)))) return null;
           return () => {
+            submitted = true;
             for (const m of contributions) {
               this.expansionStock.set(m.sourceId, Math.min(fresh.budgets.get(m.sourceId) ?? 0, this.expansionStock.get(m.sourceId) ?? Infinity) - m.count);
               this.expansionPending.set(m.sourceId, (this.expansionPending.get(m.sourceId) ?? 0) + 1);
             }
             this.inventoryRevision++; this.expansionDelay = 0;
-            this.flights.set(job.targetId, { mode, job, due: Date.now() + Math.max(60000, completionMs(job) + 15000) });
-            this.states.expansion.sent += contributions.length;
+            if (job.kind === 'sun-supply') {
+              this.sunPlanner.launched(job);
+              this.sunReservations = new Map([...this.sunReservations].filter(([id]) => id === job.targetId));
+            } else if (job.kind === 'upgrade') this.upgrades.launched(job);
+            else {
+              this.flights.set(jobKey(job), { mode, job, due: Date.now() + Math.max(60000, completionMs(job) + 15000) });
+              if (job.targetKind === 'sun') { this.sunPlanner.launched(job); this.sunReservations.clear(); }
+            }
+            if (job.kind !== 'upgrade') this.states.expansion.sent += contributions.length;
+            this.journal.sent(job); this.states.expansion.metrics = this.journal.snapshot();
             this.states.expansion.flights = this.flightCount(mode);
             this.states.expansion.queue = this.states.expansion.queue.filter(queued => queued !== job);
             let receipt: Promise<void>;
-            try { receipt = job.support?.length ? world.launchGroup!(job) : world.launch(job.sourceId, job.targetId, job.count); }
+            try { receipt = job.kind === 'upgrade' ? world.upgrade!(job.sourceId)
+              : job.targetKind && job.targetKind !== 'planet' ? world.launchBody!(job)
+              : job.support?.length ? world.launchGroup!(job) : world.launch(job.sourceId, job.targetId, job.count); }
             catch (error) { receipt = Promise.reject(error); }
-            this.emit(mode, `已提交发射 → #${job.targetId}；后台确认，继续下一项`, 'sent');
+            this.emit(mode, `已提交${job.kind === 'upgrade' ? '升级' : '发射'} → ${targetLabel(job)}；后台确认，继续下一项`, 'sent');
             const observer = this.observeExpansion(world, config, job, receipt).finally(() => this.expansionObservers.delete(observer));
             this.expansionObservers.add(observer);
           };
         }, this.expansionDelay, current, signal);
       } finally {
         this.states.expansion.queue = this.states.expansion.queue.filter(queued => queued !== job);
+        if (!submitted && (job.kind === 'sun-supply' || job.targetKind === 'sun')) this.sunReservations.clear();
         this.nextPlan.expansion = 0;
       }
       return;
@@ -373,10 +443,11 @@ export class Commander {
     let supplyDeliveries: { count: number; travelMs: number }[] = [];
     try { await dispatch(() => {
       const fresh = world.read();
-      if (!current() || this.scanning || this.coveredRevision !== dispatchRevision || this.flights.has(job.targetId) || this.pendingTargets.has(job.targetId)) return null;
+      if (!current() || this.scanning || this.coveredRevision !== dispatchRevision || this.flights.has(jobKey(job)) || this.pendingTargets.has(jobKey(job))) return null;
       const target = fresh.planets.find(p => p.planetId === job.targetId);
       if (!target || !inZone(target, config.policy.zone)) return null;
       const available = this.budgets(fresh);
+      for (const [id, count] of this.sunReservations) available.set(id, Math.max(0, (available.get(id) ?? 0) - count));
       if (members(job).some(m => !fresh.owned.some(p => p.planetId === m.sourceId && inZone(p, config.policy.zone)))) return null;
       const source = fresh.owned.find(p => p.planetId === job.sourceId)!;
       const refreshed = job.kind === 'reinforce' ? this.offensive.refresh(world, fresh, config, available, job)
@@ -388,7 +459,7 @@ export class Commander {
         this.debits.set(m.sourceId, (this.debits.get(m.sourceId) ?? 0) + m.count);
         if (mode === 'attack') this.attackReservations.set(m.sourceId, Math.max(0, (this.attackReservations.get(m.sourceId) ?? 0) - m.count));
       }
-      this.pendingTargets.add(actual.targetId); this.inventoryRevision++;
+      this.pendingTargets.add(jobKey(actual)); this.inventoryRevision++;
       if (refreshed.kind === 'reinforce') supplyDeliveries = members(refreshed).map(m => ({ count: arriving(m.count, world.route!(m.sourceId, refreshed.targetId)!.lossPct), travelMs: m.travelMs }));
       return () => {
         this.emit(mode, `正在${refreshed.kind === 'reinforce' ? `集结 ${members(refreshed).length} 颗来源` : '发送'} → #${refreshed.targetId}，${totalCount(refreshed)} 探针；等待服务器确认`, 'sending');
@@ -397,7 +468,7 @@ export class Commander {
     }, config.settings.intervalMs, current, mode, signal);
     if (actual) {
       if (actual.kind === 'reinforce') this.supplies.push({ hub: actual.targetId, deliveries: supplyDeliveries.map(s => ({ count: s.count, arrival: Date.now() + s.travelMs })) });
-      else this.flights.set(actual.targetId, { mode, job: actual, due: Date.now() + completionMs(actual) });
+      else this.flights.set(jobKey(actual), { mode, job: actual, due: Date.now() + completionMs(actual) });
       if (mode === 'attack' && this.configs.attack === config) this.offensive.launched(actual, config);
       this.states[mode].sent += members(actual).length;
       this.states[mode].flights = this.flightCount(mode);
@@ -412,7 +483,7 @@ export class Commander {
     } catch (error) { this.fail(error); } finally {
       if (actual) {
         for (const m of members(actual)) this.pendingSources.delete(m.sourceId);
-        this.pendingTargets.delete(actual.targetId); this.inventoryRevision++;
+        this.pendingTargets.delete(jobKey(actual)); this.inventoryRevision++;
         this.nextPlan = { expansion: 0, attack: 0 };
       }
       this.nextPlan[mode] = 0;
@@ -422,9 +493,12 @@ export class Commander {
     const active = () => this.configs.expansion === config && !this.failure;
     try {
       await within(receipt, 15000);
-      const flight = this.flights.get(job.targetId);
+      const flight = this.flights.get(jobKey(job));
       if (flight?.job === job) flight.due = Date.now() + completionMs(job);
-      if (active()) this.emit('expansion', `已确认发射 → #${job.targetId}；等待抵达和占领确认`, 'sent');
+      if (job.kind === 'upgrade') { this.journal.upgraded(); this.states.expansion.metrics = this.journal.snapshot(); }
+      if (active()) this.emit('expansion', job.kind === 'upgrade' ? `已确认升级星球 #${job.sourceId}；同步库存`
+        : job.kind === 'sun-supply' ? `已确认恒星补给 → 星球 #${job.targetId}；等待到账后单星出击`
+        : `已确认发射 → ${targetLabel(job)}；等待抵达和占领确认`, 'sent');
     } catch (error) {
       if (active()) this.emit('expansion', `发射回执未确认 → #${job.targetId}：${error instanceof Error ? error.message : String(error)}；已跳过，继续其他目标`, 'waiting');
     }

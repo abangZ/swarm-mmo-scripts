@@ -29,6 +29,14 @@ export function RunStatus({ state, uncertain, prefix = '' }: { state: ExpansionS
   return <div className="status-card">
     <div className="section-heading"><h3>当前动作</h3><StatusBadge state={state} uncertain={uncertain} /></div>
     <p id={`${prefix}auto-status`} className="auto-status" role="status" aria-live="polite">{state.phase}</p>
+    {state.sun && <p>{state.sun.waiting ?? `本轮恒星目标 #${state.sun.target}${state.sun.hub ? `，汇集星球 #${state.sun.hub}` : ''}`}</p>}
+    {state.metrics && <div className="expansion-progress">
+      <p>本次占领：星球 {state.metrics.planets} · 恒星 {state.metrics.suns} · 陨石 {state.metrics.meteorites}；确认升级 {state.metrics.upgrades} 次</p>
+      <p>已提交兵力 {state.metrics.sentProbes} · 占领时新增基础产能 {state.metrics.addedBaseProduction}/分钟</p>
+      <p>持续保有 30 分钟：{state.metrics.retention30.held}/{state.metrics.retention30.total} · 60 分钟：{state.metrics.retention60.held}/{state.metrics.retention60.total}（仅已到观察时间的星球与恒星）</p>
+      {!!state.exposed && <p>已观测到 {state.exposed} 个前沿暴露目标，按扩张取向处理。</p>}
+    </div>}
+    {!!state.decisions?.length && <details><summary>本轮选择原因</summary><ul>{state.decisions.map((reason, index) => <li key={index}>{reason}</li>)}</ul></details>}
     {(state.rallies ?? (state.rally ? [state.rally] : [])).map(rally => <div className="rally-status" key={String(rally.hub)}><strong>中转星 #{String(rally.hub)} → 目标 #{String(rally.target)}</strong>
       <p>中转可用 {rally.available} / 预计需要 {rally.required}<br />补给在途 {rally.incoming} · 待募集来源 {rally.sources} 颗</p>
     </div>)}

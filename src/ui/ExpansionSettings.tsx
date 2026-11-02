@@ -37,6 +37,23 @@ export function ExpansionSettings({ value, disabled, onChange, attack = false }:
     <input id="maxSources" type="number" min={1} max={maxCoalitionSources} step={1} disabled={disabled} value={value.maxSources} onChange={event => onChange('maxSources', event.target.value)} />
     <p>默认 3 颗，填 1 表示仅单星。优先用更少来源完成占领，不会为了凑够设置数量而拆兵。</p>
     <p>协同来源彼此距离不超过 8，预计抵达时间相差不超过 15 秒。一次批量派兵，计一次扩张队列操作。</p></>}
+    {!attack && <>
+      <label htmlFor="cautiousExpansion">扩张取向</label>
+      <select id="cautiousExpansion" disabled={disabled} value={value.cautiousExpansion} onChange={event => onChange('cautiousExpansion', event.target.value)}>
+        <option value="0">快速铺开：优先占更多点</option><option value="1">稳健扩张：暂缓孤立高风险点</option>
+      </select>
+      <p>默认持续派兵，不等待整波落地。两种取向均保留来源守军和已知来袭预算；风险按已观测邻敌与支援距离判断。</p>
+      {([{ key: 'captureSuns', label: '尽早占领附近无主恒星' }, { key: 'captureMeteorites', label: '占领能及时抵达的无主陨石' },
+        { key: 'upgradeStable', label: '稳定后方按需逐级升级' }] as const).map(({ key, label }) => <label className="strategy-toggle" key={key} htmlFor={key}>
+        <input id={key} type="checkbox" disabled={disabled} checked={value[key] === '1'} onChange={event => onChange(key, event.target.checked ? '1' : '0')} />{label}
+      </label>)}
+      <p>每轮优先安排一颗可占恒星。碎片兵力先汇到己方星球，实际到账后发射；不长期攒兵。陨石无产量，持有至到期才获得奖励，到期时驻军也消失。</p>
+      <label htmlFor="economicHorizonMs">收益评估周期（秒，默认 10800＝3 小时）</label>
+      <input id="economicHorizonMs" type="number" min={60} max={86400} step={60} disabled={disabled} value={value.economicHorizonMs} onChange={event => onChange('economicHorizonMs', event.target.value)} />
+      <label htmlFor="stableMs">升级前连续稳定时间（秒，默认 600＝10 分钟）</label>
+      <input id="stableMs" type="number" min={60} max={86400} step={60} disabled={disabled} value={value.stableMs} onChange={event => onChange('stableMs', event.target.value)} />
+      <p>升级只使用稳定、无邻敌、无来袭、无附近无主目标且未参与任务的后方来源；每次升一级，基础回本时间须在收益周期内。刷新或断线后重新观察稳定时间。</p>
+    </>}
     <p>两个模式使用独立队列和操作间隔，共享兵力预算；覆盖扫描采用较快的周期。</p>
   </>;
 }

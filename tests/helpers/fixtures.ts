@@ -11,7 +11,7 @@ export function fixture(rows: Planet[]) {
   const launchSwarm = mock.fn(async () => {});
   const conn: Connection = {
     isActive: true,
-    db: { planet: { iter: () => rows, planetId: { find: id => rows.find(p => p.planetId === id) } } },
+    db: { planet: { iter: () => rows, planetId: { find: id => rows.find(p => p.planetId === id) } }, meteorite: { iter: () => [] }, sun_swarm2: { iter: () => [] } },
     reducers: { launchSwarm },
     subscriptionBuilder: () => {
       let applied = () => {};

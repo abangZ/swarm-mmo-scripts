@@ -24,6 +24,22 @@ async function panel(controller?: AppController) {
   return { root, element, click, select, dispose };
 }
 
+test('fast-expansion strategy controls persist special targets and stable upgrades without starting on toggle', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: 100000 });
+  const f = fakeWorld(), controller = new AppController(() => f.world), ui = await panel(controller);
+  await ui.click('toggle');
+  assert.equal(ui.element<HTMLSelectElement>('cautiousExpansion').value, '0');
+  for (const key of ['captureSuns', 'captureMeteorites', 'upgradeStable']) assert.equal(ui.element<HTMLInputElement>(key).checked, true);
+  await ui.click('upgradeStable'); await ui.select('cautiousExpansion', '1');
+  assert.equal((f.world.launch as any).mock.callCount(), 0);
+  await ui.click('start');
+  const saved = JSON.parse(localStorage.getItem('swarm-helper-expansion-settings')!);
+  assert.equal(saved.upgradeStable, 0); assert.equal(saved.cautiousExpansion, 1); assert.equal(saved.captureSuns, 1);
+  assert.equal(saved.economicHorizonMs, 10800000);
+  for (const key of ['captureSuns', 'captureMeteorites', 'upgradeStable']) assert.equal(ui.element<HTMLInputElement>(key).disabled, true);
+  await act(async () => { ui.dispose(); t.mock.timers.tick(500); await settle(); });
+});
+
 test('tabs replace manual actions and support keyboard navigation without starting expansion', async () => {
   const create = mock.fn(() => fakeWorld().world);
   const ui = await panel(new AppController(create));

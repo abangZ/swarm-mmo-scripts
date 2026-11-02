@@ -1,7 +1,7 @@
 import { defaults, scanIntervals, validateSettings, type ExpansionSettings } from '../features/expansion/types';
 
 const storageKey = 'swarm-helper-expansion-settings';
-const timeKeys = new Set<keyof ExpansionSettings>(['scanMs', 'intervalMs', 'horizonMs', 'maxTravelMs']);
+const timeKeys = new Set<keyof ExpansionSettings>(['scanMs', 'intervalMs', 'horizonMs', 'maxTravelMs', 'economicHorizonMs', 'stableMs']);
 export const settingKeys = Object.keys(defaults) as (keyof ExpansionSettings)[];
 export type SettingsForm = Record<keyof ExpansionSettings, string>;
 
@@ -10,8 +10,9 @@ export function toForm(settings: ExpansionSettings): SettingsForm {
 }
 export function loadSettings(key = storageKey): SettingsForm {
   try {
-    const saved = JSON.parse(localStorage.getItem(key) ?? 'null');
-    if (saved) {
+    const stored = JSON.parse(localStorage.getItem(key) ?? 'null');
+    if (stored) {
+      const saved = { ...defaults, ...stored };
       saved.maxSources ??= defaults.maxSources;
       saved.maxTravelMs ??= defaults.maxTravelMs;
       if (!scanIntervals.some(interval => interval === saved.scanMs)) saved.scanMs = defaults.scanMs;

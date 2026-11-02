@@ -135,3 +135,15 @@ CPU 采样定位到逐来源重复排序、附近机会计算和大规模方案�
 重新读取当前 `/play` 与公开前端 `/assets/index-BI64H8hP.js`：行星操作菜单使用 `data-testid="radial-menu"`，上层组件 props 包含 `conn`、`myIdentity`、`planetId` 和屏幕坐标；派兵圆盘有 `dial-slider` 标记，其地图组件路线状态包含 `descriptor.targetKind`、`targetId` 和屏幕坐标。`getPickedBody()` 读取的是选中来源集合，不能用来替代弹出菜单的目标。舰队公开 schema 包含 `targetPlanetId`、`ownerId`、`probeCount`；本轮使用目标 ID 的独立舰队订阅及联盟订阅，不依赖扩张/进攻运行。
 
 类型检查、140 项 Node/JSDOM 测试和生产构建通过。另以实际 React 树、本地模拟连接和原生菜单相同的 props/路线结构在 Chrome 检查：两方及盟友统计、复用 DOM 后切换目标、底部菜单自动上移、点击穿透关闭、派兵圆盘目标，以及关闭后订阅归零、发射调用为零。浏览器页面不是实际游戏，查询未在真实服务器验收，也未在真实账号派兵；公开前端更新可能需要调整菜单适配。
+
+## 恒星、陨石与稳定后方升级（v0.13.0，2026-11-02）
+
+本轮读取 `/play` 当前公开前端 `/assets/index-2daj5LmU.js`，并核对官方 [Suns](https://www.swarm-mmo.com/wiki/suns)、[Meteorites](https://www.swarm-mmo.com/wiki/meteorites)、[Automation](https://www.swarm-mmo.com/wiki/automation)。没有进入真实账号执行发射或升级。
+
+- 当前恒星表 `sun2` 的字段为 sunId、ownerId、probeCount、positionX/Y、galaxyId，其中 probeCount 表示超级信标。`quoteSend('planet', sourceId, 'sun', targetId)` 返回的 exact.probes 仍是来源要发送的普通探针数量；原生单星接口为 `launchSwarmAtSun({sourcePlanetId, targetSunId, probeCount})`，批量路由 kind = 1。
+- 陨石已经是独立 `meteorite` 表，包含 meteoriteId、ownerId、probeCount、positionX/Y、galaxyId、expiresAt（timestamp.toMillis）；不是普通 planet 行。前端目标类型名为 comet，单星接口为 `launchSwarmAtMeteorite({sourcePlanetId, targetMeteoriteId, probeCount})`，原生批量路由 kind = 5。本版陨石使用单来源。
+- 普通 swarm 表同时包含 targetSunId / targetMeteoriteId；恒星还可能收到 sun_swarm2（targetSunId、targetBlackHole）舰队，不能只查普通行星来袭。原生 ID 各表独立，助手以类型和 ID 组合做锁定、分配与缓存。
+- 每支行星到恒星舰队分别执行边境损耗与整数转换，不能把两个 60 普通探针的小包当作 1 个超级信标。脚本先把碎片兵力汇到己方行星，再以实际库存出击；募集合计使用未享受 Conversion 优惠的保守预算，最终发射使用原生报价。
+- 公开 schema 注册 `upgrade_planet`，参数为 planetId；另有 `set_upgrade_automation_bulk({planetIds, enable})`。本版选择稳定后方单级升级，避免持续原生自动化抢占之后的扩张预算。升级以未折扣成本作为上界，回本按最低基础生产计算。
+
+测试采用模拟 World、模拟 SpacetimeDB 和 React/JSDOM，覆盖目标 ID 冲突、不同发射路由、恒星不足转换单位时先汇集、跨境双段损耗、重叠守军预算、陨石到期、旧设置迁移和稳定升级。新表订阅和原生 reducer 依据公开前端核对，尚未进行真实游戏服务器操作验收。

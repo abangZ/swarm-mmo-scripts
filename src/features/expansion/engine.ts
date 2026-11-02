@@ -4,6 +4,7 @@ import { Commander, idleState } from '../commander/engine';
 import { defaultPolicy } from '../commander/types';
 import type { AttackDiagnostics } from '../attack/diagnostics';
 import type { SourceReport } from './proposals';
+import type { StrategyMetrics } from './strategy';
 
 export type ExpansionActivity = 'idle' | 'starting' | 'scanning' | 'waiting' | 'queued' | 'sending' | 'sent' | 'captured' | 'paused' | 'stopping' | 'stopped' | 'error';
 export interface ExpansionState {
@@ -13,6 +14,8 @@ export interface ExpansionState {
   rallies?: NonNullable<ExpansionState['rally']>[];
   attackDiagnostics?: AttackDiagnostics;
   planning?: { sources: number; ready: number; assigned: number; idle: SourceReport[] };
+  metrics?: StrategyMetrics; decisions?: string[]; exposed?: number;
+  sun?: { target: bigint; hub?: bigint; waiting?: string };
 }
 /** Compatibility facade; all execution is owned by the shared commander. */
 export class ExpansionEngine {
