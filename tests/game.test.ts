@@ -6,8 +6,8 @@ import { getAutomationSession } from '../src/game/session';
 import { subscribe } from '../src/game/subscriptions';
 import { fixture } from './helpers/fixtures';
 
-test('capture quote always adds two including re-quotes, and rejects invalid quotes', () => {
-  assert.deepEqual(safeQuote({ travelMs: 2000, lossPct: 0, outOfRange: false, exact: { reason: 'capture', probes: 8 } }), { count: 10, travelMs: 2000 });
+test('capture quote adds one including re-quotes, and rejects invalid quotes', () => {
+  assert.deepEqual(safeQuote({ travelMs: 2000, lossPct: 0, outOfRange: false, exact: { reason: 'capture', probes: 8 } }), { count: 9, travelMs: 2000 });
   assert.equal(safeQuote({ travelMs: 2, lossPct: 0, outOfRange: false, exact: { reason: 'levelUp', probes: 8 } }), null);
   assert.equal(safeQuote({ travelMs: 2, lossPct: 0, outOfRange: false, exact: { reason: 'capture', probes: 0xffffffff } }), null);
 });
@@ -44,4 +44,54 @@ test('query timeout unsubscribes', async t => {
   const pending = assert.rejects(subscribe(f.session.conn, 'SELECT * FROM planet'), /超时/);
   t.mock.timers.tick(12000); await pending;
   assert.equal(unsubscribe.mock.callCount(), 1);
+});
+
+test('regional adapter subscribes threats and technology locally, without expanding around distant owned planets', async () => {
+  const me = '0'.repeat(64), enemy = 'a'.repeat(64);
+  const own = { toHexString: () => me }, other = { toHexString: () => enemy };
+  const rows = [
+    { planetId: 1n, positionX: 0, positionY: 0, probeCount: 100, galaxyId: 1n, ownerId: own },
+    { planetId: 2n, positionX: 1, positionY: 0, probeCount: 20, galaxyId: 1n, ownerId: other },
+    { planetId: 99n, positionX: 10000, positionY: 10000, probeCount: 100, galaxyId: 2n, ownerId: own },
+  ];
+  const f = fixture(rows), queries: string[] = [];
+  const original = f.session.conn.subscriptionBuilder;
+  f.session.conn.subscriptionBuilder = () => {
+    const builder = original(), subscribe = builder.subscribe.bind(builder);
+    builder.subscribe = query => { queries.push(query); return subscribe(query); }; return builder;
+  };
+  Object.assign(f.session.conn.db, {
+    swarm: { iter: () => [{ swarmId: 1n, ownerId: other, targetPlanetId: 1n, sourceX: 1, sourceY: 0, probeCount: 30, arrivalTime: { toMillis: () => 200000 } }] },
+    clan_member2: { iter: () => [] }, player_tech: { iter: () => [] }, sun2: { iter: () => [] }, base: { iter: () => [] },
+    attack_automation: { iter: () => [] }, upgrade_automation: { iter: () => [{ planetId: 99n }] },
+    player: { iter: () => [{ identity: other, username: '邻居' }] },
+  });
+  const canvas = document.querySelector('canvas') as unknown as Record<string, any>;
+  const props = canvas['__reactFiber$fixture'].return.memoizedProps;
+  props.myIdentity = me;
+  props.ref = { current: { quoteSend: () => null, listOwnedBodies: () => [{ kind: 'planet', id: 1n, probes: 100 }, { kind: 'planet', id: 99n, probes: 100 }] } };
+  const { defaults } = await import('../src/features/expansion/types');
+  const { defaultPolicy } = await import('../src/features/commander/types');
+  const world = new GameWorld();
+  world.configure([{ settings: defaults, policy: { ...defaultPolicy, zone: { x: 0, y: 0, radius: 8 } } }]);
+  await world.scan(defaults, () => true);
+  const snapshot = world.read();
+  assert.deepEqual(snapshot.owned.map(p => p.planetId), [1n]);
+  assert.equal(snapshot.allOwned!.length, 2);
+  assert.ok(queries.some(q => q.startsWith('SELECT * FROM swarm WHERE') && q.includes('target_x')));
+  assert.ok(queries.some(q => q.startsWith('SELECT * FROM sun2 WHERE')));
+  assert.ok(queries.some(q => q.startsWith('SELECT * FROM base WHERE')));
+  assert.ok(queries.some(q => q.includes('SELECT * FROM player WHERE') && q.includes(enemy)));
+  assert.equal(queries.some(q => q.includes('10000')), false);
+  assert.equal(snapshot.fleets![0].owner, enemy);
+  assert.equal(snapshot.fleets![0].arriving, 30);
+  assert.equal(snapshot.players!.get(enemy), '邻居');
+  assert.equal(snapshot.automated!.has(99n), true);
+  assert.equal(snapshot.intelligence, true);
+  queries.length = 0;
+  await world.syncInventory([1n, 1n, 99n]);
+  assert.deepEqual(queries, ['SELECT * FROM planet WHERE planet_id = 1 OR planet_id = 99']);
+  assert.equal(f.handles.at(-1)!.isActive(), false);
+  assert.equal(f.handles[0].isActive(), true, 'normal subscriptions remain active after the temporary inventory barrier');
+  world.dispose(); assert.ok(f.handles.every(h => !h.isActive()));
 });

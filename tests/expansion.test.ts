@@ -5,6 +5,73 @@ import { defaults, members, totalCount } from '../src/features/expansion/types';
 import { ExpansionEngine } from '../src/features/expansion/engine';
 import { unresolved, withControl } from '../src/runtime/operations';
 import { fakeWorld, coalitionWorld, identity, planet, settle } from './helpers/fixtures';
+import { safeQuote } from '../src/game/expansion-world';
+
+test('one source captures garrisons 1 and 2 with one safety probe each without waiting for a full scan', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  const f = fakeWorld(); f.target.probeCount = 2;
+  const second = planet(3n, 2, 1); second.probeCount = 1; f.snapshot.planets.push(second);
+  f.snapshot.budgets.set(1n, 7);
+  f.world.quote = (_source, id) => safeQuote({ travelMs: id === 2n ? 1000 : 2000, lossPct: 0, outOfRange: false, exact: { reason: 'capture', probes: f.snapshot.planets.find(p => p.planetId === id)!.probeCount + 1 } });
+  f.world.launch = mock.fn(async (source, _target, count) => { f.snapshot.budgets.set(source, f.snapshot.budgets.get(source)! - count); });
+  f.world.syncInventory = mock.fn(async () => {});
+  const engine = new ExpansionEngine(() => {}, () => f.world);
+  const run = engine.start({ ...defaults, scanMs: 120000 }); await settle();
+  t.mock.timers.tick(1500); await settle();
+  const calls = (f.world.launch as any).mock.calls.map((c: any) => c.arguments);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map((c: any[]) => [c[1], c[2]]).sort(), [[2n, 4], [3n, 3]]);
+  assert.equal(f.snapshot.budgets.get(1n), 0);
+  assert.equal((f.world.scan as any).mock.callCount(), 1);
+  assert.equal((f.world.syncInventory as any).mock.callCount(), 2);
+  engine.stop(); t.mock.timers.tick(500); await run;
+});
+
+test('a neutral garrison of one uses a single affordable source instead of a 1 plus 2 coalition', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  const f = coalitionWorld(); f.target.probeCount = 1;
+  f.snapshot.budgets.set(1n, 2); f.snapshot.budgets.set(4n, 5);
+  f.world.quote = source => f.snapshot.budgets.get(source)! >= 3 ? { count: 3, travelMs: 10000 } : null;
+  const engine = new ExpansionEngine(() => {}, () => f.world);
+  const run = engine.start(defaults); await settle();
+  assert.deepEqual((f.world.launch as any).mock.calls[0].arguments, [4n, 2n, 3]);
+  assert.equal((f.world.launchGroup as any).mock.callCount(), 0);
+  engine.stop(); t.mock.timers.tick(500); await run;
+});
+
+test('a queued coalition becomes a solo if production makes one contributor sufficient', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  localStorage.setItem('swarm-helper-last-operation-v1', '100000');
+  const f = coalitionWorld(); f.target.probeCount = 4;
+  f.snapshot.budgets.set(1n, 3); f.snapshot.budgets.set(4n, 3);
+  f.world.quote = source => f.snapshot.budgets.get(source)! >= 6 ? { count: 6, travelMs: 10000 } : null;
+  const engine = new ExpansionEngine(() => {}, () => f.world);
+  const run = engine.start(defaults); await settle();
+  assert.equal(members(engine.state.queue[0]).length, 2);
+  f.snapshot.budgets.set(1n, 6); t.mock.timers.tick(1500); await settle();
+  assert.deepEqual((f.world.launch as any).mock.calls[0].arguments, [1n, 2n, 6]);
+  assert.equal((f.world.launchGroup as any).mock.callCount(), 0);
+  engine.stop(); t.mock.timers.tick(500); await run;
+});
+
+test('stopping while confirmed inventory is synchronizing cancels subsequent sends without marking launch unknown', async () => {
+  const f = fakeWorld(); let sync!: () => void;
+  f.world.syncInventory = () => new Promise<void>(resolve => { sync = resolve; });
+  const engine = new ExpansionEngine(() => {}, () => f.world);
+  const run = engine.start(defaults); await settle();
+  engine.stop(); sync(); await run;
+  assert.equal((f.world.launch as any).mock.callCount(), 1);
+  assert.equal(engine.state.activity, 'stopped'); assert.equal(unresolved(), false);
+  assert.equal((f.world.dispose as any).mock.callCount(), 1);
+});
+
+test('inventory sync failure stops after the known launch, without retry or an unknown launch marker', async () => {
+  const f = fakeWorld(); f.world.syncInventory = async () => { throw new Error('库存同步失败'); };
+  const engine = new ExpansionEngine(() => {}, () => f.world); await engine.start(defaults);
+  assert.equal((f.world.launch as any).mock.callCount(), 1);
+  assert.equal(engine.state.activity, 'error'); assert.match(engine.state.phase, /库存同步失败/);
+  assert.equal(unresolved(), false);
+});
 
 test('engine re-quotes before dispatch, adds reservations and locks in-flight targets', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
@@ -21,7 +88,7 @@ test('engine re-quotes before dispatch, adds reservations and locks in-flight ta
   engine.stop(); t.mock.timers.tick(500); await run;
   assert.equal((f.world.dispose as any).mock.callCount(), 1);
 });
-test('engine adopts manual fleets and never sends when quote plus two exceeds budget', async t => {
+test('engine adopts manual fleets and never sends when the safe quote exceeds budget', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
   const f = fakeWorld(); f.snapshot.incoming.add(2n);
   const engine = new ExpansionEngine(() => {}, () => f.world);
@@ -80,7 +147,7 @@ test('engine submits a whole triple in one operation and tracks capture once', a
   const run = engine.start(defaults); await settle();
   assert.equal((f.world.launchGroup as any).mock.callCount(), 1);
   const job = (f.world.launchGroup as any).mock.calls[0].arguments[0];
-  assert.equal(members(job).length, 3); assert.equal(totalCount(job), 13);
+  assert.equal(members(job).length, 3); assert.equal(totalCount(job), 12);
   assert.equal((f.world.launch as any).mock.callCount(), 0);
   assert.equal(engine.state.sent, 3); assert.equal(engine.state.flights, 1);
   f.snapshot.incoming.add(2n);
@@ -104,7 +171,7 @@ test('group dispatch is cancelled when any contributor loses its budget during t
 });
 test('reserve and single-source mode both prevent an underfunded coalition', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
-  for (const settings of [{ ...defaults, reserve: 2 }, { ...defaults, maxSources: 1 }]) {
+  for (const settings of [{ ...defaults, reserve: 3 }, { ...defaults, maxSources: 1 }]) {
     const f = coalitionWorld();
     const engine = new ExpansionEngine(() => {}, () => f.world);
     const run = engine.start(settings); await settle();
@@ -131,11 +198,11 @@ test('execution preserves the optimized split that leaves troops for another tar
   f.world.route = (_source, target) => target === 2n ? { travelMs: 10000, lossPct: 0 } : null;
   const engine = new ExpansionEngine(() => {}, () => f.world);
   const run = engine.start(defaults); await settle();
-  const job = (f.world.launchGroup as any).mock.calls[0].arguments[0];
-  assert.equal(members(job).find(m => m.sourceId === 1n)!.count, 5);
-  assert.equal(members(job).find(m => m.sourceId === 4n)!.count, 8);
-  t.mock.timers.tick(1500); await settle();
   assert.deepEqual((f.world.launch as any).mock.calls[0].arguments, [1n, 3n, 5]);
+  t.mock.timers.tick(1500); await settle();
+  const job = (f.world.launchGroup as any).mock.calls[0].arguments[0];
+  assert.ok(members(job).find(m => m.sourceId === 1n)!.count <= 5);
+  assert.equal(totalCount(job), 12);
   engine.stop(); t.mock.timers.tick(500); await run;
 });
 

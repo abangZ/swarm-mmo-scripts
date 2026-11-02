@@ -1,12 +1,13 @@
 import type { Assignment, Contribution, ExpansionSettings } from './types';
 import type { Planet } from '../../game/types';
 import { distance } from '../../shared/distance';
+import { captureMargin } from './types';
 
 export const cooperationRadius = 8;
 export const arrivalSpreadMs = 15000;
 export interface Route { travelMs: number; lossPct: number }
 export interface GroupSource extends Route { planet: Planet; available: number }
-export function validRoute(route: Route | null): route is Route {
+export function validRoute(route: Route | null | undefined): route is Route {
   return !!route && Number.isFinite(route.travelMs) && route.travelMs >= 0 && Number.isInteger(route.lossPct) && route.lossPct >= 0 && route.lossPct < 100;
 }
 export function arriving(count: number, lossPct: number): number { return Math.floor(count * (100 - lossPct) / 100); }
@@ -14,7 +15,7 @@ function permutations<T>(items: T[]): T[][] {
   return items.length < 2 ? [items] : items.flatMap((item, i) => permutations(items.filter((_, j) => i !== j)).map(tail => [item, ...tail]));
 }
 // Neutral planets have no owner technology or production. Ignoring attacker Assault is conservative.
-// Allocate garrison + 1 to win, plus TWO ARRIVING probes shared by the group, after per-fleet tolls.
+// Allocate garrison + 1 to win, plus the shared arrival margin after per-fleet tolls.
 export function coalitionOptions(target: Planet, sources: GroupSource[], settings: ExpansionSettings): Assignment[] {
   if (target.ownerId != null || sources.length < 2 || sources.length > settings.maxSources || sources.length > 3) return [];
   if (new Set(sources.map(s => s.planet.planetId)).size !== sources.length) return [];
@@ -24,7 +25,7 @@ export function coalitionOptions(target: Planet, sources: GroupSource[], setting
     if (sources.some(other => distance(source.planet, other.planet) > cooperationRadius)) return [];
   }
   if (Math.max(...sources.map(s => s.travelMs)) - Math.min(...sources.map(s => s.travelMs)) > arrivalSpreadMs) return [];
-  const required = target.probeCount + 3;
+  const required = target.probeCount + 1 + captureMargin;
   const results = new Map<string, Assignment>();
   for (const ordered of permutations(sources)) {
     // Greedy and balanced variants leave different sources available to attack other targets.

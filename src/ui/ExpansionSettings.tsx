@@ -5,6 +5,7 @@ interface Props {
   value: SettingsForm;
   disabled: boolean;
   onChange(key: keyof Settings, value: string): void;
+  attack?: boolean;
 }
 const numericFields = [
   { key: 'candidates', label: '每颗星球的候选数 n（1–50）', min: 1, max: 50, step: 1 },
@@ -14,20 +15,27 @@ const numericFields = [
   { key: 'reserve', label: '每颗星球留守探针', min: 0, max: 0xffffffff, step: 1 },
 ] as const;
 
-export function ExpansionSettings({ value, disabled, onChange }: Props) {
+export function ExpansionSettings({ value, disabled, onChange, attack = false }: Props) {
+  const id = (key: string) => attack ? `attack-${key}` : key;
   return <>
-    <label htmlFor="scanMs">每隔多久扫描一次</label>
-    <select id="scanMs" disabled={disabled} value={value.scanMs} onChange={event => onChange('scanMs', event.target.value)}>
+    <label htmlFor={id('scanMs')}>每隔多久扫描一次</label>
+    <select id={id('scanMs')} disabled={disabled} value={value.scanMs} onChange={event => onChange('scanMs', event.target.value)}>
       {scanIntervals.map(ms => <option key={ms} value={ms / 1000}>{ms / 1000} 秒</option>)}
     </select>
     {numericFields.map(({ key, label, ...bounds }) => <div key={key}>
-      <label htmlFor={key}>{label}</label>
-      <input id={key} type="number" {...bounds} disabled={disabled} value={value[key]} onChange={event => onChange(key, event.target.value)} />
+      <label htmlFor={id(key)}>{key === 'horizonMs' && !attack ? '规划队列窗口（秒，不限制航行时间）' : label}</label>
+      <input id={id(key)} type="number" {...bounds} disabled={disabled} value={value[key]} onChange={event => onChange(key, event.target.value)} />
     </div>)}
-    <label htmlFor="maxSources">每个目标最多协同星球数</label>
+    {!attack && <>
+      <label htmlFor="maxTravelMs">最长航行时间（秒，默认 1800＝30 分钟）</label>
+      <input id="maxTravelMs" type="number" min={10} max={14400} step={1} disabled={disabled} value={value.maxTravelMs} onChange={event => onChange('maxTravelMs', event.target.value)} />
+      <p>规划 120 秒表示安排近期要发出的队列，不要求两分钟内抵达。近程先发，后方来源也可执行较远任务；搜索距离与固定区域仍生效。</p>
+    </>}
+    {!attack && <><label htmlFor="maxSources">每个目标最多协同星球数</label>
     <select id="maxSources" disabled={disabled} value={value.maxSources} onChange={event => onChange('maxSources', event.target.value)}>
       <option value="1">1 颗（仅单星）</option><option value="2">2 颗</option><option value="3">3 颗</option>
     </select>
-    <p>协同来源彼此距离不超过 8，预计抵达时间相差不超过 15 秒。一次批量派兵，共用操作限速。</p>
+    <p>协同来源彼此距离不超过 8，预计抵达时间相差不超过 15 秒。一次批量派兵，共用操作限速。</p></>}
+    <p>同时运行时共用队列，采用较慢的操作间隔与较快的扫描周期。</p>
   </>;
 }

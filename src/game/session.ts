@@ -31,9 +31,9 @@ export function getAutomationSession(): AutomationSession {
       if (typeof map?.quoteSend === 'function' && typeof map.listOwnedBodies === 'function' && session.conn.db.swarm) return { ...session, map };
     }
   }
-  throw new Error('游戏报价或舰队接口不可用，自动扩张已停止。');
+  throw new Error('游戏报价或舰队接口不可用，自动操作已停止。');
 }
 export function assertSession(session: Session): void {
   const now = getSession();
-  if (now.conn !== session.conn || now.identity !== session.identity) throw new Error('游戏连接或身份已变化，请重新启动自动扩张。');
+  if (now.conn !== session.conn || now.identity !== session.identity) throw new Error('游戏连接或身份已变化，请重新启动所需模式。');
 }

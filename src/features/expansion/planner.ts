@@ -5,22 +5,42 @@ export function schedule(jobs: Assignment[], interval: number, horizon: number):
   const ordered = [...jobs].sort((a, b) => completionMs(b) - completionMs(a) || (a.targetId < b.targetId ? -1 : 1));
   return ordered.every((job, i) => i * interval + completionMs(job) <= horizon) ? ordered : null;
 }
-function better(a: Assignment[], b: Assignment[]): boolean {
+function better(a: Assignment[], b: Assignment[], rapid = false): boolean {
   if (a.length !== b.length) return a.length > b.length;
+  const fleets = (jobs: Assignment[]) => jobs.reduce((n, j) => n + members(j).length, 0);
+  if (fleets(a) !== fleets(b)) return fleets(a) < fleets(b);
+  const travel = (jobs: Assignment[]) => jobs.reduce((sum, j) => sum + completionMs(j), 0);
+  if (rapid && travel(a) !== travel(b)) return travel(a) < travel(b);
+  const value = (jobs: Assignment[]) => jobs.reduce((sum, j) => sum + (j.value ?? 0), 0);
+  if (value(a) !== value(b)) return value(a) > value(b);
   const sum = (jobs: Assignment[], key: 'count' | 'travelMs') => jobs.reduce((total, j) => total + (key === 'count' ? totalCount(j) : completionMs(j)), 0);
-  return sum(a, 'travelMs') < sum(b, 'travelMs') || (sum(a, 'travelMs') === sum(b, 'travelMs') && sum(a, 'count') < sum(b, 'count'));
+  return sum(a, 'count') < sum(b, 'count') || (sum(a, 'count') === sum(b, 'count') && sum(a, 'travelMs') < sum(b, 'travelMs'));
 }
-export function planExpansion(edges: Assignment[], budgets: Map<bigint, number>, interval: number, horizon: number): Plan {
+export function planExpansion(edges: Assignment[], budgets: Map<bigint, number>, interval: number, horizon: number, maxTravelMs?: number): Plan {
+  // Expansion uses a dispatch window, independent of the maximum journey time.
+  // The default retains the arrival-deadline semantics used by hostile attacks.
+  const rapid = maxTravelMs !== undefined;
+  const order = (jobs: Assignment[]) => {
+    if (!rapid) return schedule(jobs, interval, horizon);
+    if ((jobs.length - 1) * interval > horizon) return null;
+    return [...jobs].sort((a, b) => completionMs(a) - completionMs(b) || (a.targetId < b.targetId ? -1 : 1));
+  };
   const targets = new Map<bigint, Assignment[]>();
   for (const edge of edges) {
     const contributions = members(edge);
     if (contributions.length > 3 || new Set(contributions.map(m => m.sourceId)).size !== contributions.length) continue;
-    if (contributions.some(m => !Number.isSafeInteger(m.count) || m.count < 1 || !Number.isFinite(m.travelMs) || m.travelMs < 0 || m.travelMs > horizon || m.count > (budgets.get(m.sourceId) ?? 0))) continue;
+    if (contributions.some(m => !Number.isSafeInteger(m.count) || m.count < 1 || !Number.isFinite(m.travelMs) || m.travelMs < 0 || m.travelMs > (maxTravelMs ?? horizon) || m.count > (budgets.get(m.sourceId) ?? 0))) continue;
     const options = targets.get(edge.targetId) ?? [];
     options.push(edge); targets.set(edge.targetId, options);
   }
-  const groups = [...targets.values()];
-  for (const group of groups) group.sort((a, b) => totalCount(a) - totalCount(b) || completionMs(a) - completionMs(b));
+  let groups = [...targets.values()];
+  const pruned = groups.length > 128 || edges.length > 1000;
+  if (pruned) {
+    const rank = (job: Assignment) => rapid ? 1 / (1 + completionMs(job)) : (1 + (job.value ?? 0)) / (totalCount(job) * (1 + completionMs(job) / horizon));
+    groups = groups.map(options => options.sort((a, b) => members(a).length - members(b).length || rank(b) - rank(a)).slice(0, 8))
+      .sort((a, b) => rank(b[0]) - rank(a[0])).slice(0, 128);
+  }
+  for (const group of groups) group.sort((a, b) => members(a).length - members(b).length || (rapid ? completionMs(a) - completionMs(b) : 0) || totalCount(a) - totalCount(b) || completionMs(a) - completionMs(b));
   groups.sort((a, b) => a.length - b.length || completionMs(a[0]) - completionMs(b[0]));
   let best: Assignment[] = [];
   // Multiple bounded greedy passes provide a useful incumbent before branch and bound.
@@ -28,23 +48,23 @@ export function planExpansion(edges: Assignment[], budgets: Map<bigint, number>,
     const left = new Map(budgets), jobs: Assignment[] = [];
     for (const options of ordered) {
       for (const job of options) {
-        if (members(job).some(m => m.count > (left.get(m.sourceId) ?? 0)) || !schedule([...jobs, job], interval, horizon)) continue;
+        if (members(job).some(m => m.count > (left.get(m.sourceId) ?? 0)) || !order([...jobs, job])) continue;
         jobs.push(job); for (const m of members(job)) left.set(m.sourceId, left.get(m.sourceId)! - m.count); break;
       }
     }
-    if (better(jobs, best)) best = jobs;
+    if (better(jobs, best, rapid)) best = jobs;
   }
-  let exact = groups.length <= 18 && edges.length <= 100;
+  let exact = !pruned && groups.length <= 18 && edges.length <= 100;
   if (exact) {
     let visited = 0;
     const left = new Map(budgets), jobs: Assignment[] = [];
     const walk = (index: number) => {
       if (++visited > 20000) { exact = false; return; }
-      if (better(jobs, best)) best = [...jobs];
+      if (better(jobs, best, rapid)) best = [...jobs];
       if (index === groups.length || jobs.length + groups.length - index < best.length) return;
       for (const job of groups[index]) {
         const contributions = members(job);
-        if (contributions.some(m => m.count > (left.get(m.sourceId) ?? 0)) || !schedule([...jobs, job], interval, horizon)) continue;
+        if (contributions.some(m => m.count > (left.get(m.sourceId) ?? 0)) || !order([...jobs, job])) continue;
         jobs.push(job);
         for (const m of contributions) left.set(m.sourceId, left.get(m.sourceId)! - m.count);
         walk(index + 1);
@@ -56,5 +76,5 @@ export function planExpansion(edges: Assignment[], budgets: Map<bigint, number>,
     };
     walk(0);
   }
-  return { jobs: schedule(best, interval, horizon) ?? [], exact };
+  return { jobs: order(best) ?? [], exact };
 }

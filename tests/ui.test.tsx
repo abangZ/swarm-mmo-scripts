@@ -6,6 +6,7 @@ import { mountPanel } from '../src/app/mount';
 import { AppController } from '../src/app/controller';
 import { defaults } from '../src/features/expansion/types';
 import { settle, fakeWorld } from './helpers/fixtures';
+import { appVersion } from '../src/app/version';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 async function panel(controller?: AppController) {
@@ -27,9 +28,12 @@ test('tabs replace manual actions and support keyboard navigation without starti
   const create = mock.fn(() => fakeWorld().world);
   const ui = await panel(new AppController(create));
   assert.equal(ui.element('panel').hidden, true);
+  assert.equal(ui.root.querySelector('.app-version')!.textContent, `Swarm 助手 v${appVersion}`);
+  assert.equal(ui.root.querySelector('.app-version')!.closest('[hidden]'), null);
   assert.match(ui.element('toggle').textContent!, /未启动/);
   assert.match(ui.element('compact-log').textContent!, /尚无运行日志/);
   await ui.click('toggle');
+  assert.equal(ui.root.querySelector('.app-version')!.closest('[hidden]'), null);
   assert.equal(ui.root.activeElement, ui.element('collapse'));
   assert.equal(ui.root.getElementById('manual'), null);
   assert.equal(ui.root.getElementById('send'), null);
@@ -38,7 +42,8 @@ test('tabs replace manual actions and support keyboard navigation without starti
   assert.equal(ui.element('attack').hidden, false);
   assert.equal(ui.element('expansion').hidden, true);
   assert.equal(ui.root.activeElement, ui.element('tab-attack'));
-  assert.match(ui.element('attack').textContent!, /开发中/);
+  assert.match(ui.element('attack').textContent!, /开始进攻/);
+  assert.equal(ui.element<HTMLInputElement>('attack-x').value, '');
   assert.equal(create.mock.callCount(), 0);
   await ui.click('collapse');
   assert.equal(ui.root.activeElement, ui.element('toggle'));
@@ -53,6 +58,8 @@ test('saved settings migrate into controlled fields and save seconds as millisec
   assert.equal(ui.element<HTMLSelectElement>('scanMs').value, '10');
   assert.equal(ui.element<HTMLSelectElement>('maxSources').value, '3');
   assert.equal(ui.element<HTMLInputElement>('candidates').value, '7');
+  assert.equal(ui.element<HTMLInputElement>('maxTravelMs').value, '1800');
+  assert.match(ui.root.textContent!, /规划队列窗口.*不限制航行时间/);
   await ui.select('scanMs', '30');
   await ui.select('maxSources', '2');
   await ui.click('start');
@@ -66,6 +73,20 @@ test('saved settings migrate into controlled fields and save seconds as millisec
   await ui.click('collapse');
   assert.match(ui.element('toggle').textContent!, /异常/);
   assert.match(ui.element('compact-log').textContent!, /test stop/);
+});
+
+test('idle source details explain available stock and the separate travel limit', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: 100000 });
+  const f = fakeWorld();
+  f.world.quote = () => ({ count: 7, travelMs: 1900000 });
+  f.world.route = () => ({ travelMs: 1900000, lossPct: 0 });
+  const ui = await panel(new AppController(() => f.world));
+  await ui.click('toggle'); await ui.click('start');
+  assert.match(ui.root.textContent!, /未派兵原因/);
+  assert.match(ui.root.textContent!, /#1 \(0, 0\) · 可用 20/);
+  assert.match(ui.root.textContent!, /1900 秒.*1800 秒/);
+  assert.equal((f.world.launch as any).mock.callCount(), 0);
+  await act(async () => { ui.dispose(); t.mock.timers.tick(500); await settle(); });
 });
 
 test('starting folds settings; tabs and collapse keep one engine; unmount cancels pending scan', async () => {
@@ -139,4 +160,68 @@ test('uncertain outcome disables dispatch until explicit review, without startin
   assert.equal(localStorage.getItem('swarm-helper-uncertain-v1'), null);
   assert.equal(ui.element('start').disabled, false);
   assert.equal(createWorld.mock.callCount(), 0);
+});
+
+test('map-based regions and enemy picker remain independent, and preview never starts automation', async () => {
+  const f = fakeWorld();
+  const enemy = 'a'.repeat(64);
+  f.target.ownerId = { toHexString: () => enemy };
+  Object.assign(f.snapshot, { identity: 'me', allies: new Set(['me']), intelligence: true, players: new Map([[enemy, '邻居甲']]) });
+  const point = mock.fn(() => ({ x: 1, y: 0 })), focus = mock.fn();
+  const controller = new AppController(() => f.world, { point, focus });
+  const ui = await panel(controller);
+  await ui.click('toggle'); await ui.click('tab-attack'); await ui.click('attack-pick-view');
+  assert.equal(ui.element<HTMLInputElement>('attack-x').value, '1');
+  assert.equal(ui.element<HTMLInputElement>('attack-y').value, '0');
+  assert.equal(controller.getSnapshot().policies.expansion.scope, 'all');
+  await ui.click('attack-preview');
+  assert.match(ui.element('attack-preview-status').textContent!, /敌方 1/);
+  assert.match(ui.element('attack-enemy').textContent!, /邻居甲/);
+  await ui.select('attack-enemy', enemy);
+  assert.equal(controller.getSnapshot().policies.attack.enemy, enemy);
+  assert.equal((f.world.launch as any).mock.callCount(), 0);
+  assert.equal(controller.getSnapshot().attack.running, false);
+  const ids = [...ui.root.querySelectorAll('[id]')].map(el => el.id);
+  assert.equal(new Set(ids).size, ids.length, 'hidden tabs must not duplicate DOM ids');
+});
+
+test('attack requires a fixed zone and unknown results disable both start buttons', async () => {
+  const create = mock.fn(() => fakeWorld().world);
+  const ui = await panel(new AppController(create));
+  await ui.click('toggle'); await ui.click('tab-attack'); await ui.click('attack-start');
+  assert.match(ui.element('attack-auto-status').textContent!, /选取战区/);
+  assert.equal(create.mock.callCount(), 0);
+  await act(async () => ui.dispose());
+  localStorage.setItem('swarm-helper-uncertain-v1', 'pending');
+  const next = await panel(new AppController(create));
+  assert.equal(next.element('start').disabled, true);
+  assert.equal(next.element('attack-start').disabled, true);
+});
+
+test('obsolete region preview is discarded after editing and is cleaned up on unmount', async () => {
+  const f = fakeWorld(); let finish!: () => void;
+  f.world.scan = () => new Promise<void>(resolve => { finish = resolve; });
+  const controller = new AppController(() => f.world, { point: () => ({ x: 1, y: 0 }), focus: () => {} });
+  const ui = await panel(controller);
+  await ui.click('toggle'); await ui.click('tab-attack'); await ui.click('attack-pick-view');
+  await act(async () => { void controller.previewRegion('attack'); await settle(); });
+  assert.equal(controller.getSnapshot().previews.attack.busy, true);
+  await act(async () => { controller.setPolicy('attack', 'x', '100'); finish(); await settle(); });
+  assert.equal(controller.getSnapshot().previews.attack.enemies.length, 0);
+  assert.equal(controller.getSnapshot().previews.attack.message, '');
+  assert.equal((f.world.dispose as any).mock.callCount(), 1);
+});
+
+test('hub selection preserves bigint identity and never moves the fixed war zone', async () => {
+  const f = fakeWorld(), id = '9007199254740993';
+  const controller = new AppController(() => f.world, { point: () => ({ x: 3, y: 4, planetId: id }), focus: () => {} });
+  const ui = await panel(controller);
+  await ui.click('toggle'); await ui.click('tab-attack'); await ui.click('attack-pick-view');
+  const zone = { x: controller.getSnapshot().policies.attack.x, y: controller.getSnapshot().policies.attack.y };
+  await ui.click('attack-pick-hub');
+  assert.equal(ui.element<HTMLSelectElement>('attack-rallyId').value, id);
+  await ui.select('attack-advanceHub', 'no');
+  assert.equal(controller.getSnapshot().policies.attack.advanceHub, 'no');
+  assert.deepEqual({ x: controller.getSnapshot().policies.attack.x, y: controller.getSnapshot().policies.attack.y }, zone);
+  assert.equal((f.world.launch as any).mock.callCount(), 0);
 });

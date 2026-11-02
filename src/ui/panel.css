@@ -56,8 +56,8 @@ button.danger { color: #ffaaaa; border-color: #683e4d; }
 .settings-card { padding: 0; background: transparent; }
 .settings-toggle { border: 0; width: 100%; padding: 11px 12px; background: transparent; display: flex; justify-content: space-between; align-items: center; text-align: left; font-size: 12px; gap: 8px; }
 .settings-toggle small { display: block; margin-top: 2px; }
-#expansion-settings { padding: 0 12px 12px; border-top: 1px solid #263a52; }
-#auto-status { font-size: 13px; color: #d8e8f8; overflow-wrap: anywhere; }
+.settings-content { padding: 0 12px 12px; border-top: 1px solid #263a52; }
+.auto-status { font-size: 13px; color: #d8e8f8; overflow-wrap: anywhere; }
 .scan-stats { display: grid; grid-template-columns: 1fr 1fr 1.3fr; gap: 8px; margin-top: 14px; }
 .scan-stats dt, .run-stats dt { color: #93a9c2; font-size: 11px; }
 .scan-stats dd { font-size: 13px; margin-top: 3px; }
@@ -66,11 +66,11 @@ button.danger { color: #ffaaaa; border-color: #683e4d; }
 .count { display: inline-block; border-radius: 4px; background: #253e58; padding: 0 5px; margin-left: 3px; font-size: 11px; }
 .empty { padding: 5px 0; color: #8ea3bc; }
 ol { list-style: none; margin: 10px 0 0; padding: 0; }
-#auto-queue li { border-top: 1px solid #26364c; padding: 8px 0; overflow-wrap: anywhere; }
-#auto-queue li:last-child { padding-bottom: 0; }
-#auto-queue strong { display: block; font-size: 12px; }
-#auto-queue span { font-size: 11px; color: #9bb1cb; }
-#activity-log { max-height: 210px; overflow: auto; scrollbar-width: thin; }
+.auto-queue li { border-top: 1px solid #26364c; padding: 8px 0; overflow-wrap: anywhere; }
+.auto-queue li:last-child { padding-bottom: 0; }
+.auto-queue strong { display: block; font-size: 12px; }
+.auto-queue span { font-size: 11px; color: #9bb1cb; }
+.activity-log { max-height: 210px; overflow: auto; scrollbar-width: thin; }
 .log-entry { display: grid; grid-template-columns: 55px 1fr; gap: 8px; padding: 7px 0; border-top: 1px solid #23354a; font-size: 12px; }
 .log-entry time { color: #829bb8; font-size: 11px; font-variant-numeric: tabular-nums; }
 .log-entry span { overflow-wrap: anywhere; }
@@ -83,3 +83,21 @@ summary { cursor: pointer; }
 .placeholder h3 { font-size: 16px; margin-top: 12px; }
 .placeholder-icon { font-size: 36px; color: #638ba9; }
 @media (max-width: 380px) { section { padding: 12px; } .tabs small { display: block; margin: 0; } }
+
+.compact-modes { display: flex; justify-content: space-between; gap: 10px; margin-top: 6px; font-size: 11px; }
+.compact-modes > span { display: flex; align-items: center; gap: 5px; }
+.region-settings { border-bottom: 1px solid #263a52; padding: 14px 0; }
+.region-actions { display: flex; gap: 6px; margin-top: 10px; }
+.region-actions button { flex: 1; padding: 8px 5px; font-size: 12px; }
+.coordinate-grid { display: flex; gap: 8px; }
+.coordinate-grid > div { flex: 1; min-width: 0; }
+.coordinate-grid input { padding: 8px; }
+.policy-heading { margin-top: 18px; }
+.locate-enemy { margin-top: 8px; width: 100%; font-size: 12px; }
+.shared-status { display: flex; align-items: center; gap: 8px; color: #b3d4e7; font-size: 11px; }
+.shared-status button { white-space: nowrap; padding: 5px 8px; font-size: 11px; }
+.rally-status { margin-top: 12px; padding: 10px; border-radius: 8px; background: #193548; font-size: 12px; }
+.rally-status p { margin-top: 5px; }
+.app-version { margin-top: 5px; padding-left: 4px; color: #a6b8cf; font-size: 11px; text-shadow: 0 1px 3px #000; }
+.expansion-progress ul { margin: 8px 0 0; padding-left: 16px; }
+.expansion-progress li { margin-top: 8px; overflow-wrap: anywhere; }
