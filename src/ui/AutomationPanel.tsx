@@ -61,8 +61,8 @@ export function AutomationPanel({ mode, region, summary, state, settings, logs, 
             <span>{totalCount(job)} 探针 · 航行约 {Math.ceil(completionMs(job) / 1000)} 秒{job.kind === 'reinforce' ? ' · 己方中转集结' : job.support?.length ? ' · 合兵' : ''}</span>
           </li>)}
         </ol>}
-      {state.queue.length > 5 && <p className="muted">另有 {state.queue.length - 5} 项，执行前会再次校验。</p>}
+      {state.queue.length > 5 && <p className="muted">另有 {state.queue.length - 5} 项，{attack ? '执行前会再次校验' : '按本轮计划依次执行'}。</p>}
     </div>
-    <p className="footer-note">收起或切换 Tab 继续运行；后台暂停派兵。发射确认后仍需等待扫描核实占领。</p>
+    <p className="footer-note">收起或切换 Tab 继续运行；{attack ? '进攻在后台暂停派兵' : '扩张在后台继续，断线自动尝试恢复'}。发射不代表占领，扫描后核实结果。</p>
   </>;
 }

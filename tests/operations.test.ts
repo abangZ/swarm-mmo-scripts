@@ -23,7 +23,7 @@ test('unknown outcomes survive restart and require explicit unlock; stale jobs d
   await withControl(() => dispatch(() => null, 1500, () => true));
   assert.equal(unresolved(), false);
   let resolve!: () => void;
-  const pending = assert.rejects(withControl(() => dispatch(() => () => new Promise<void>(r => { resolve = r; }), 1500, () => true)), /结果未知/);
+  const pending = assert.rejects(withControl(() => dispatch(() => () => new Promise<void>(r => { resolve = r; }), 1500, () => true, 'attack')), /结果未知/);
   await settle(); t.mock.timers.tick(15000); await pending;
   assert.equal(unresolved(), true);
   await assert.rejects(withControl(async () => {}), /上次发射结果未知/);
@@ -77,11 +77,19 @@ test('throttle cancellation does not consume a lane interval or leave an unknown
   assert.equal(localStorage.getItem('swarm-helper-uncertain-v1'), null);
 });
 
-test('persisted tokens from a reload or the legacy script block both lanes until review', async () => {
-  for (const marker of ['old-request', JSON.stringify({ attack: 'before-reload-a', expansion: 'before-reload-e' })]) {
+test('persisted attack tokens from a reload still block both lanes until review', async () => {
+  for (const marker of [JSON.stringify({ attack: 'before-reload-a' }), JSON.stringify({ attack: 'before-reload-a', expansion: 'before-reload-e' })]) {
     localStorage.setItem('swarm-helper-uncertain-v1', marker);
     for (const mode of ['attack', 'expansion'] as const) await assert.rejects(dispatch(() => async () => {}, 1000, () => true, mode), /结果未知/);
     await unlockAfterReview(); assert.equal(unresolved(), false);
+  }
+});
+
+test('old expansion and legacy timeout markers no longer require review and are cleared only under the shared lock', async () => {
+  for (const marker of ['old-request', JSON.stringify({ expansion: 'before-reload' })]) {
+    localStorage.setItem('swarm-helper-uncertain-v1', marker);
+    assert.equal(unresolved(), false);
+    await withControl(async () => { assert.equal(localStorage.getItem('swarm-helper-uncertain-v1'), null); });
   }
 });
 

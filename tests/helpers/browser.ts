@@ -13,7 +13,7 @@ Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { lo
 const cleanups: (() => void | Promise<void>)[] = [];
 // Unit tests advance their own timers; host CPU contention must not create unplanned
 // cooperative yields. The planning tests explicitly advance this clock to test yields.
-beforeEach(() => { mock.method(performance, 'now', () => 0); });
+beforeEach(() => { mock.method(performance, 'now', () => 0); mock.method(Math, 'random', () => 0.5); });
 export function onCleanup(cleanup: () => void | Promise<void>): void { cleanups.push(cleanup); }
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();

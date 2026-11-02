@@ -73,6 +73,71 @@ test('receipt and inventory synchronization consume the interval instead of addi
   engine.stop(); t.mock.timers.tick(500); await settle(); t.mock.timers.tick(500); await run;
 });
 
+test('1331 sources are planned once and the queued launches keep a 1.2-second cadence without more quotes', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  t.mock.method(performance, 'now', () => 0);
+  const f = fakeWorld();
+  f.snapshot.owned = Array.from({ length: 1331 }, (_, i) => planet(BigInt(i + 1000), i % 30, Math.floor(i / 30), true));
+  f.snapshot.planets = [...f.snapshot.owned, ...Array.from({ length: 30 }, (_, i) => planet(BigInt(i + 2), i % 10, 1))];
+  f.snapshot.budgets = new Map(f.snapshot.owned.map(p => [p.planetId, 100]));
+  const quote = mock.fn((_source: bigint, target: bigint) => ({ count: 10, travelMs: 60000 + Number(target) * 1000 }));
+  f.world.quote = quote;
+  f.world.syncInventory = async () => {};
+  const times: number[] = [];
+  f.world.launch = async (source, _target, count) => {
+    times.push(Date.now()); f.snapshot.budgets.set(source, f.snapshot.budgets.get(source)! - count);
+  };
+  const engine = new ExpansionEngine(() => {}, () => f.world);
+  const run = engine.start({ ...defaults, scanMs: 30000, intervalMs: 1200, candidates: 30, radius: 64, maxSources: 1 }); await settle();
+  assert.equal(engine.state.planning?.sources, 1331);
+  const plannedQuotes = quote.mock.callCount();
+  assert.ok(plannedQuotes >= 1331);
+  for (let i = 1; i <= 24; i++) { t.mock.timers.tick(1200); await settle(); }
+  assert.deepEqual(times, Array.from({ length: 25 }, (_, i) => 100000 + i * 1200));
+  assert.equal(quote.mock.callCount(), plannedQuotes);
+  assert.equal((f.world.scan as any).mock.callCount(), 1);
+  assert.equal(engine.state.queue.length, 5);
+  engine.stop(); await run;
+});
+
+test('the 30-second scan delay starts after slow planning, before receipts or the queue finish', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  let clock = 0;
+  t.mock.method(performance, 'now', () => clock += 10);
+  const f = fakeWorld(); f.snapshot.budgets.set(1n, 1000);
+  f.snapshot.planets.push(...Array.from({ length: 29 }, (_, i) => planet(BigInt(i + 3), i + 2, 0)));
+  f.world.syncInventory = async () => {};
+  const engine = new ExpansionEngine(() => {}, () => f.world);
+  const run = engine.start({ ...defaults, scanMs: 30000, candidates: 30 }); await settle();
+  assert.equal(engine.state.nextScanAt, null);
+  t.mock.timers.tick(40000); await settle();
+  assert.equal((f.world.scan as any).mock.callCount(), 1, 'a plan longer than the interval must not trigger another scan');
+  assert.equal(engine.state.nextScanAt, null);
+  t.mock.method(performance, 'now', () => 0); t.mock.timers.tick(0); await settle();
+  assert.equal(engine.state.nextScanAt, 170000);
+  assert.equal((f.world.launch as any).mock.callCount(), 1);
+  assert.equal(engine.state.queue.length, 29, 'the remaining queue is still pending');
+  t.mock.timers.tick(29750); await settle();
+  assert.equal((f.world.scan as any).mock.callCount(), 1);
+  t.mock.timers.tick(250); await settle();
+  assert.equal((f.world.scan as any).mock.callCount(), 2, 'the next scan does not wait for the queue to drain');
+  engine.stop(); await run;
+});
+
+test('a stale expansion entry is skipped immediately and the next planned entry keeps the same limiter slot', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  const f = fakeWorld(); f.snapshot.budgets.set(1n, 100);
+  f.snapshot.planets.push(planet(3n, 2, 0), planet(4n, 3, 0));
+  const times: { target: bigint; time: number }[] = [];
+  f.world.launch = async (_source, target) => { times.push({ target, time: Date.now() }); };
+  const engine = new ExpansionEngine(() => {}, () => f.world);
+  const run = engine.start({ ...defaults, intervalMs: 1200 }); await settle();
+  f.snapshot.incoming.add(3n);
+  t.mock.timers.tick(1200); await settle();
+  assert.deepEqual(times, [{ target: 2n, time: 100000 }, { target: 4n, time: 101200 }]);
+  engine.stop(); await run;
+});
+
 test('new sources request coverage immediately rather than waiting for the periodic scan', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
   const f = fakeWorld(); f.snapshot.budgets.set(1n, 0);

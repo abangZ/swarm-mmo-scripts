@@ -41,7 +41,7 @@ export function App({ controller }: { controller: AppController }) {
         <button id="tab-expansion" role="tab" ref={expansionTab} aria-selected={state.mode === 'expansion'} aria-controls="expansion" tabIndex={state.mode === 'expansion' ? 0 : -1} onClick={() => controller.setMode('expansion')} onKeyDown={onTabKey}>自动扩张</button>
         <button id="tab-attack" role="tab" ref={attackTab} aria-selected={state.mode === 'attack'} aria-controls="attack" tabIndex={state.mode === 'attack' ? 0 : -1} onClick={() => controller.setMode('attack')} onKeyDown={onTabKey}>进攻模式</button>
       </div>
-      {state.uncertain && !state.expansion.running && !state.attack.running && <p className="notice error" role="alert">上次发射结果未知，已锁定操作。请在下方核对并恢复。</p>}
+      {state.uncertain && !state.expansion.running && !state.attack.running && <p className="notice error" role="alert">上次进攻结果未知，已锁定操作。请在下方核对并恢复；扩张超时会自动跳过。</p>}
       {(state.expansion.running || state.attack.running) && <div className="shared-status">
         <span>{state.expansion.running && state.attack.running ? '扩张与进攻同时运行' : state.expansion.running ? '自动扩张仍在运行' : '进攻模式仍在运行'} · 共享预算 · 独立队列</span>
         <button id="stop-all" onClick={controller.stopAll}>全部停止</button>
@@ -63,8 +63,8 @@ export function App({ controller }: { controller: AppController }) {
               onFocus={() => controller.focusRegion(mode)} onFocusEnemy={controller.focusEnemy} onPickHub={controller.pickHub} onPreview={() => void controller.previewRegion(mode)} />} />
         </div>;
       })}
-      <RecoveryPanel reviewed={state.reviewed} busy={state.unlocking} status={state.unlockStatus}
-        onReviewedChange={controller.setReviewed} onUnlock={controller.unlock} />
+      {state.uncertain && <RecoveryPanel reviewed={state.reviewed} busy={state.unlocking} status={state.unlockStatus}
+        onReviewedChange={controller.setReviewed} onUnlock={controller.unlock} />}
     </section>
     <div className="app-version" title="当前页面实际加载的助手版本">Swarm 助手 v{appVersion}</div>
   </>;

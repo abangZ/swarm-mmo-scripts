@@ -116,7 +116,7 @@ test('quote refresh failure after yielding stops both modes before any transmiss
   assert.equal(unresolved(), false);
 });
 
-test('planning uses the remaining limiter wait and still refreshes inventory at transmission', async t => {
+test('the completed queue waits on the limiter without re-planning and still respects inventory at transmission', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
   const f = fakeWorld(); f.snapshot.budgets.set(1n, 100); f.snapshot.planets.push(planet(3n, 2, 0));
   const quotes = mock.fn(f.world.quote); f.world.quote = quotes;
@@ -124,7 +124,7 @@ test('planning uses the remaining limiter wait and still refreshes inventory at 
   const run = commander.start('expansion', config()); await settle();
   const initialQuotes = quotes.mock.callCount();
   t.mock.timers.tick(250); await settle();
-  assert.ok(quotes.mock.callCount() > initialQuotes, 'the next plan is prepared before the 1500ms interval expires');
+  assert.equal(quotes.mock.callCount(), initialQuotes, 'the next queued entry does not repeat planning or quotes');
   assert.equal((f.world.launch as any).mock.callCount(), 1);
   f.snapshot.budgets.set(1n, 0);
   t.mock.timers.tick(1250); await settle();

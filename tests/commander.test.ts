@@ -170,16 +170,14 @@ test('shared sources retain inventory barriers and dynamic guards with separate 
   const expand = config(), attack = config();
   expand.settings.intervalMs = 1000; attack.settings.intervalMs = 2000;
   expand.settings.reserve = 5; attack.policy.frontlinePercent = 25;
-  let pending: { source: bigint; count: number } | undefined;
   f.world.launch = async (source, target, count) => {
-    assert.equal(pending, undefined, 'no next launch before inventory synchronization completes');
     assert.ok(count <= f.snapshot.budgets.get(source)! - reserveFor(f.source, f.snapshot, [expand, attack]));
-    pending = { source, count }; f.launches.push({ source, target, count, time: Date.now() });
+    f.snapshot.budgets.set(source, f.snapshot.budgets.get(source)! - count);
+    f.launches.push({ source, target, count, time: Date.now() });
     await new Promise(resolve => setTimeout(resolve, 500));
   };
   f.world.syncInventory = async () => {
     await new Promise(resolve => setTimeout(resolve, 500));
-    f.snapshot.budgets.set(pending!.source, f.snapshot.budgets.get(pending!.source)! - pending!.count); pending = undefined;
   };
   const run = f.commander.start('expansion', expand); f.commander.start('attack', attack);
   await settle();
@@ -196,16 +194,20 @@ test('stopping expansion during inventory sync preserves attack execution and th
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
   const f = fixture(false); f.snapshot.budgets.set(1n, 60);
   let completeSync!: () => void;
-  f.world.syncInventory = mock.fn(() => new Promise<void>(resolve => { completeSync = resolve; }));
+  let firstSync = true;
+  f.world.syncInventory = mock.fn(async () => { if (firstSync) { firstSync = false; await new Promise<void>(resolve => { completeSync = resolve; }); } });
+  const launch = f.world.launch;
+  f.world.launch = async (source, target, count) => { f.snapshot.budgets.set(source, f.snapshot.budgets.get(source)! - count); await launch(source, target, count); };
   const run = f.commander.start('expansion', config()); await settle(); f.commander.start('attack', config());
   await settle(); t.mock.timers.tick(250); await settle();
-  assert.equal(f.launches.length, 1);
+  assert.equal(f.launches.length, 2, 'attack can use the unspent remainder while expansion inventory sync is pending');
   f.commander.stop('expansion'); t.mock.timers.tick(5000); await settle();
-  assert.equal(f.launches.length, 1);
+  assert.equal(f.launches.length, 2);
   await assert.rejects(withControl(async () => {}), /正在运行/);
-  f.snapshot.budgets.set(1n, 48); f.world.syncInventory = async () => {}; completeSync(); await settle();
+  completeSync(); await settle();
   t.mock.timers.tick(250); await settle();
   assert.deepEqual(f.launches.map(job => job.target), [2n, 9n]);
+  assert.equal(f.snapshot.budgets.get(1n), 24);
   assert.equal(f.commander.states.expansion.running, false);
   assert.equal(f.commander.states.attack.running, true);
   assert.equal((f.world.dispose as any).mock.callCount(), 0);

@@ -39,7 +39,7 @@ test('a neutral garrison of one uses a single affordable source instead of a 1 p
   engine.stop(); t.mock.timers.tick(500); await run;
 });
 
-test('a queued coalition becomes a solo if production makes one contributor sufficient', async t => {
+test('a queued coalition keeps its planned allocation without re-quoting after production', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
   localStorage.setItem('swarm-helper-last-operation-v1', '100000');
   const f = coalitionWorld(); f.target.probeCount = 4;
@@ -48,9 +48,10 @@ test('a queued coalition becomes a solo if production makes one contributor suff
   const engine = new ExpansionEngine(() => {}, () => f.world);
   const run = engine.start(defaults); await settle();
   assert.equal(members(engine.state.queue[0]).length, 2);
+  const planned = structuredClone(engine.state.queue[0]);
   f.snapshot.budgets.set(1n, 6); t.mock.timers.tick(1500); await settle();
-  assert.deepEqual((f.world.launch as any).mock.calls[0].arguments, [1n, 2n, 6]);
-  assert.equal((f.world.launchGroup as any).mock.callCount(), 0);
+  assert.equal((f.world.launch as any).mock.callCount(), 0);
+  assert.deepEqual((f.world.launchGroup as any).mock.calls[0].arguments, [planned]);
   engine.stop(); t.mock.timers.tick(500); await run;
 });
 
@@ -65,21 +66,22 @@ test('stopping while confirmed inventory is synchronizing cancels subsequent sen
   assert.equal((f.world.dispose as any).mock.callCount(), 1);
 });
 
-test('inventory sync failure stops after the known launch, without retry or an unknown launch marker', async () => {
+test('inventory sync failure keeps expansion active, without retrying the launch or creating an unknown marker', async () => {
   const f = fakeWorld(); f.world.syncInventory = async () => { throw new Error('库存同步失败'); };
-  const engine = new ExpansionEngine(() => {}, () => f.world); await engine.start(defaults);
+  const engine = new ExpansionEngine(() => {}, () => f.world); const run = engine.start(defaults); await settle();
   assert.equal((f.world.launch as any).mock.callCount(), 1);
-  assert.equal(engine.state.activity, 'error'); assert.match(engine.state.phase, /库存同步失败/);
+  assert.equal(engine.running, true); assert.match(engine.state.phase, /库存同步暂不可用/);
   assert.equal(unresolved(), false);
+  engine.stop(); await run;
 });
 
-test('engine re-quotes before dispatch, adds reservations and locks in-flight targets', async t => {
+test('engine uses the planned quote, adds reservations and locks in-flight targets', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
   const f = fakeWorld(); let quoted = 0;
   f.world.quote = () => ({ count: ++quoted === 1 ? 10 : 12, travelMs: 1000 });
   const engine = new ExpansionEngine(() => {}, () => f.world);
   const run = engine.start(defaults); await settle();
-  assert.deepEqual((f.world.launch as any).mock.calls[0].arguments, [1n, 2n, 12]);
+  assert.deepEqual((f.world.launch as any).mock.calls[0].arguments, [1n, 2n, 10]);
   t.mock.timers.tick(1500); await settle();
   assert.equal((f.world.launch as any).mock.callCount(), 1);
   f.target.ownerId = identity; f.snapshot.owned.push(f.target);
@@ -108,13 +110,13 @@ test('stop during scan cancels dispatch and disposes subscriptions', async () =>
   assert.equal((f.world.launch as any).mock.callCount(), 0);
   assert.equal((f.world.dispose as any).mock.callCount(), 1);
 });
-test('a more expensive execution quote is skipped without marking a request uncertain', async t => {
+test('expansion does not request a new quote while dequeuing', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
   const f = fakeWorld(); let quotes = 0;
-  f.world.quote = () => ({ count: ++quotes === 1 ? 12 : 21, travelMs: 1000 });
+  f.world.quote = () => { assert.equal(++quotes, 1); return { count: 12, travelMs: 1000 }; };
   const engine = new ExpansionEngine(() => {}, () => f.world);
   const run = engine.start(defaults); await settle();
-  assert.equal((f.world.launch as any).mock.callCount(), 0);
+  assert.deepEqual((f.world.launch as any).mock.calls[0].arguments, [1n, 2n, 12]);
   assert.equal(unresolved(), false);
   engine.stop(); t.mock.timers.tick(500); await run;
 });
@@ -128,15 +130,15 @@ test('stopping during the rate-limit wait cannot leak a queued dispatch', async 
   assert.equal((f.world.launch as any).mock.callCount(), 0);
   assert.equal(unresolved(), false);
 });
-test('connection failures stop the engine and release ownership', async () => {
+test('connection failures schedule automatic recovery and an explicit stop releases ownership', async () => {
   const f = fakeWorld();
   f.world.read = () => { throw new Error('连接已变化'); };
   const engine = new ExpansionEngine(() => {}, () => f.world);
-  await engine.start(defaults);
-  assert.equal(engine.running, false);
+  const run = engine.start(defaults); await settle();
+  assert.equal(engine.running, true);
   assert.match(engine.state.phase, /连接已变化/);
   assert.equal((f.world.launch as any).mock.callCount(), 0);
-  await withControl(async () => {});
+  engine.stop(); await run; await withControl(async () => {});
 });
 
 
@@ -179,14 +181,15 @@ test('reserve and single-source mode both prevent an underfunded coalition', asy
     engine.stop(); t.mock.timers.tick(500); await run;
   }
 });
-test('failed bulk requests stop without retrying individual members', async () => {
+test('failed expansion bulk requests are skipped without locking or retrying individual members', async () => {
   const f = coalitionWorld();
   f.world.launchGroup = mock.fn(async () => { throw new Error('bulk rejected'); });
   const engine = new ExpansionEngine(() => {}, () => f.world);
-  await engine.start(defaults);
+  const run = engine.start(defaults); await settle();
   assert.equal((f.world.launchGroup as any).mock.callCount(), 1);
   assert.equal((f.world.launch as any).mock.callCount(), 0);
-  assert.equal(unresolved(), true); assert.equal(engine.running, false);
+  assert.equal(unresolved(), false); assert.equal(engine.running, true);
+  engine.stop(); await run;
 });
 
 test('execution preserves the optimized split that leaves troops for another target', async t => {
@@ -206,7 +209,7 @@ test('execution preserves the optimized split that leaves troops for another tar
   engine.stop(); t.mock.timers.tick(500); await run;
 });
 
-test('cancelled scan is shown as stopped, while a rejected in-flight request remains an error', async () => {
+test('cancelled scan and a late rejected expansion request remain stopped without locking', async () => {
   const f = fakeWorld(); let rejectScan!: (error: Error) => void;
   f.world.scan = () => new Promise<void>((_resolve, reject) => { rejectScan = reject; });
   const engine = new ExpansionEngine(() => {}, () => f.world);
@@ -220,6 +223,6 @@ test('cancelled scan is shown as stopped, while a rejected in-flight request rem
   const pending = new ExpansionEngine(() => {}, () => next.world);
   const request = pending.start(defaults); await settle();
   pending.stop(); rejectLaunch(new Error('发射失败')); await request;
-  assert.equal(pending.state.activity, 'error');
-  assert.equal(unresolved(), true);
+  assert.equal(pending.state.activity, 'stopped');
+  assert.equal(unresolved(), false);
 });

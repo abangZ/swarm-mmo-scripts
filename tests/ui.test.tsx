@@ -75,7 +75,7 @@ test('saved settings migrate into controlled fields and save seconds as millisec
   assert.match(ui.element('auto-status').textContent!, /test stop/);
   assert.match(ui.element('activity-log').textContent!, /test stop/);
   await ui.click('collapse');
-  assert.match(ui.element('toggle').textContent!, /异常/);
+  assert.match(ui.element('toggle').textContent!, /暂缓操作/);
   assert.match(ui.element('compact-log').textContent!, /test stop/);
 });
 
@@ -131,11 +131,11 @@ test('running panel reports pending confirmation, scan timing, latest log while 
   const ui = await panel(new AppController(() => f.world));
   await ui.click('toggle'); await ui.click('start');
   await act(async () => { t.mock.timers.tick(700); scanDone(); await settle(); });
-  assert.match(ui.element('auto-status').textContent!, /等待服务器确认/);
+  assert.match(ui.element('auto-status').textContent!, /后台确认/);
   assert.match(ui.element('activity-log').textContent!, /扫描完成/);
   assert.equal(ui.element('next-scan').textContent, '10 秒后');
   await ui.click('collapse');
-  assert.match(ui.element('toggle').textContent!, /发送中/);
+  assert.match(ui.element('toggle').textContent!, /运行中/);
   await act(async () => { acknowledge(); await settle(); });
   assert.match(ui.element('compact-log').textContent!, /已确认发射/);
   await act(async () => { t.mock.timers.tick(2000); await settle(); });
@@ -151,7 +151,7 @@ test('running panel reports pending confirmation, scan timing, latest log while 
 });
 
 test('uncertain outcome disables dispatch until explicit review, without starting automation', async () => {
-  localStorage.setItem('swarm-helper-uncertain-v1', 'pending');
+  localStorage.setItem('swarm-helper-uncertain-v1', JSON.stringify({ attack: 'pending' }));
   const createWorld = mock.fn(() => fakeWorld().world);
   const ui = await panel(new AppController(createWorld));
   assert.match(ui.element('toggle').textContent!, /结果未知/);
@@ -159,11 +159,24 @@ test('uncertain outcome disables dispatch until explicit review, without startin
   assert.equal(ui.element('start').disabled, true);
   await ui.click('unlock');
   assert.match(ui.element('unlock-status').textContent!, /勾选确认/);
-  assert.equal(localStorage.getItem('swarm-helper-uncertain-v1'), 'pending');
+  assert.equal(localStorage.getItem('swarm-helper-uncertain-v1'), JSON.stringify({ attack: 'pending' }));
   await ui.click('reviewed'); await ui.click('unlock');
   assert.equal(localStorage.getItem('swarm-helper-uncertain-v1'), null);
   assert.equal(ui.element('start').disabled, false);
   assert.equal(createWorld.mock.callCount(), 0);
+});
+
+test('an old expansion timeout leaves the start button available and clears automatically on explicit start', async () => {
+  localStorage.setItem('swarm-helper-uncertain-v1', JSON.stringify({ expansion: 'old-timeout' }));
+  const f = fakeWorld(), controller = new AppController(() => f.world);
+  const ui = await panel(controller);
+  assert.equal(ui.element('start').disabled, false);
+  assert.equal(ui.root.getElementById('reviewed'), null);
+  assert.equal((f.world.launch as any).mock.callCount(), 0, 'loading the new panel never auto-starts');
+  await ui.click('toggle'); await ui.click('start');
+  assert.equal(localStorage.getItem('swarm-helper-uncertain-v1'), null);
+  assert.equal((f.world.launch as any).mock.callCount(), 1);
+  await ui.click('stop');
 });
 
 test('map-based regions and enemy picker remain independent, and preview never starts automation', async () => {
@@ -196,7 +209,7 @@ test('attack requires a fixed zone and unknown results disable both start button
   assert.match(ui.element('attack-auto-status').textContent!, /选取战区/);
   assert.equal(create.mock.callCount(), 0);
   await act(async () => ui.dispose());
-  localStorage.setItem('swarm-helper-uncertain-v1', 'pending');
+  localStorage.setItem('swarm-helper-uncertain-v1', JSON.stringify({ attack: 'pending' }));
   const next = await panel(new AppController(create));
   assert.equal(next.element('start').disabled, true);
   assert.equal(next.element('attack-start').disabled, true);

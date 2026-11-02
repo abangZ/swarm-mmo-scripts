@@ -3,7 +3,7 @@ import type { ExpansionActivity, ExpansionState } from '../features/expansion/en
 
 const labels: Record<ExpansionActivity, string> = {
   idle: '未启动', starting: '启动中', scanning: '扫描中', waiting: '等待中', queued: '排队中', sending: '发送中',
-  sent: '运行中', captured: '运行中', paused: '后台暂停', stopping: '停止中', stopped: '已停止', error: '已停止 · 异常',
+  sent: '运行中', captured: '运行中', paused: '暂缓操作', stopping: '停止中', stopped: '已停止', error: '已停止 · 异常',
 };
 export function statusLabel(state: ExpansionState, uncertain: boolean): string {
   return uncertain && !state.running ? '结果未知 · 已锁定' : labels[state.activity];
@@ -24,7 +24,7 @@ export function RunStatus({ state, uncertain, prefix = '' }: { state: ExpansionS
     return () => clearInterval(timer);
   }, [state.running, state.nextScanAt]);
   const nextScan = state.activity === 'scanning' ? '扫描中…'
-    : state.activity === 'paused' ? '返回前台后扫描'
+    : state.activity === 'paused' ? prefix ? '返回前台后扫描' : '自动恢复后扫描'
     : state.nextScanAt === null ? '—' : `${Math.max(0, Math.ceil((state.nextScanAt - now) / 1000))} 秒后`;
   return <div className="status-card">
     <div className="section-heading"><h3>当前动作</h3><StatusBadge state={state} uncertain={uncertain} /></div>
@@ -50,6 +50,6 @@ export function RunStatus({ state, uncertain, prefix = '' }: { state: ExpansionS
       <div><dt>候选目标</dt><dd>{state.lastScanAt === null ? '—' : state.candidateCount}</dd></div>
       <div><dt>下次扫描</dt><dd id={`${prefix}next-scan`}>{nextScan}</dd></div>
     </dl>
-    <p className="muted">{state.lastScanAt === null ? '启动后加载战区与周围情报。' : `最近扫描 ${clockTime(state.lastScanAt)} · 每秒重新评估可用兵力与目标`}</p>
+    <p className="muted">{state.lastScanAt === null ? '启动后加载战区与周围情报。' : `最近扫描 ${clockTime(state.lastScanAt)} · 本轮规划完成后开始扫描倒计时`}</p>
   </div>;
 }

@@ -1,8 +1,9 @@
-import { dispatch, unresolved, withControl } from '../../runtime/operations';
+import { dispatch, dispatchExpansion, expansionInterval, unresolved, withControl, within } from '../../runtime/operations';
 import type { ExpansionWorld, WorldSnapshot } from '../expansion/world';
+import { fleetsFor } from '../expansion/world';
 import { completionMs, members, sourceLabel, totalCount, validateSettings, type Assignment } from '../expansion/types';
 import type { ExpansionActivity, ExpansionState } from '../expansion/engine';
-import { expansionProposalSteps, expansionQuote, refreshGroup } from '../expansion/proposals';
+import { expansionProposalSteps } from '../expansion/proposals';
 import { expansionPlanSteps } from '../expansion/planner';
 import { runPlanning } from '../../runtime/planning';
 import { attackStartupIssue } from '../attack/diagnostics';
@@ -15,6 +16,8 @@ import { inZone, validatePolicy, type Mode, type ModeConfig } from './types';
 export const idleState = (): ExpansionState => ({ activity: 'idle', ownedCount: 0, candidateCount: 0, lastScanAt: null, nextScanAt: null, running: false, phase: '尚未启动', queue: [], flights: 0, sent: 0, captured: 0, missed: 0, exact: false });
 const modes: Mode[] = ['expansion', 'attack'];
 interface Flight { mode: Mode; job: Assignment; due: number }
+const fleetState = (snapshot: WorldSnapshot, target: bigint) => [snapshot.incoming.has(target), ...fleetsFor(snapshot, target)
+  .map(f => [f.id, f.owner, f.count, f.arriving, f.arrival].join(':')).sort()].join('|');
 
 /** One inventory ledger and scan coordinator; each mode owns its planning/execution lane. */
 export class Commander {
@@ -25,6 +28,8 @@ export class Commander {
   private run?: Promise<void>;
   private revision = 0;
   private nextScan = 0;
+  private scanPlans = new Set<Mode>();
+  private expansionFleets = new Map<bigint, string>();
   private nextPlan: Record<Mode, number> = { expansion: 0, attack: 0 };
   private tasks = new Map<Mode, Promise<void>>();
   private cancellations = new Map<Mode, AbortController>();
@@ -36,8 +41,17 @@ export class Commander {
   private coveredRevision = -1;
   private scanning = false;
   private failure?: Error;
+  private reconnectAt: number | null = null;
+  private identity?: string;
   private flights = new Map<bigint, Flight>();
   private debits = new Map<bigint, number>();
+  private expansionStock = new Map<bigint, number>();
+  private expansionPending = new Map<bigint, number>();
+  private expansionObservers = new Set<Promise<void>>();
+  private inventoryDirty = new Set<bigint>();
+  private inventoryRecovery?: Promise<void>;
+  private nextInventoryRetry = 0;
+  private expansionDelay = 0;
   private saving?: { key: string; until: number };
   private savingCooldown = 0;
   private offensive = new OffensivePlanner();
@@ -63,6 +77,7 @@ export class Commander {
     if (mode === 'attack') config = { ...config, settings: { ...config.settings, intervalMs: 1000 } };
     validateSettings(config.settings); validatePolicy(config.policy, mode);
     if (mode === 'attack') this.offensive.reset();
+    else this.expansionDelay = 0;
     this.configs[mode] = structuredClone(config);
     this.states[mode] = { ...idleState(), running: true };
     this.revision++; this.nextScan = 0; this.nextPlan = { expansion: 0, attack: 0 }; this.interruptWaiting();
@@ -91,17 +106,34 @@ export class Commander {
     this.configs = {}; this.attackReservations.clear(); this.revision++; this.interruptWaiting();
     for (const mode of modes) if (this.states[mode].running) this.emit(mode, this.failure.message, 'error');
   }
+  private recover(error: unknown) {
+    if (!this.configs.expansion || unresolved()) { this.fail(error); return; }
+    if (this.reconnectAt !== null) return;
+    if (this.configs.attack) this.stop('attack');
+    this.revision++; this.nextScan = 0; this.scanPlans.clear(); this.interruptWaiting();
+    this.states.expansion.queue = []; this.states.expansion.nextScanAt = null;
+    this.reconnectAt = Date.now() + 5000;
+    this.emit('expansion', `连接或情报暂不可用，5 秒后自动尝试恢复：${error instanceof Error ? error.message : String(error)}`, 'paused');
+  }
   private async loop() {
     try {
       await withControl(async () => {
         try {
           if (!this.active) return;
-          this.world = this.createWorld();
           while (this.active) {
-            if (document.visibilityState === 'hidden') {
-              for (const mode of modes) if (this.configs[mode]) { this.states[mode].nextScanAt = null; this.emit(mode, '页面在后台，暂停发射；返回后重新扫描', 'paused'); }
-              this.nextScan = 0; this.interruptWaiting(); await this.wait(500);
-            } else await this.tick();
+            try {
+              if (this.reconnectAt !== null) {
+                if (Date.now() < this.reconnectAt) { await this.wait(Math.min(1000, this.reconnectAt - Date.now())); continue; }
+                await Promise.all(this.tasks.values()); await Promise.all(this.expansionObservers); await this.inventoryRecovery;
+                this.world?.dispose(); this.world = undefined; this.reconnectAt = null;
+                if (!this.active) break;
+              }
+              this.world ??= this.createWorld();
+              if (document.visibilityState === 'hidden' && !this.configs.expansion) {
+                for (const mode of modes) if (this.configs[mode]) { this.states[mode].nextScanAt = null; this.emit(mode, '页面在后台，暂停发射；返回后重新扫描', 'paused'); }
+                this.nextScan = 0; this.interruptWaiting(); await this.wait(500);
+              } else await this.tick();
+            } catch (error) { this.recover(error); }
             this.finishStopped();
             if (this.active) await this.wait(250);
           }
@@ -110,20 +142,28 @@ export class Commander {
           // Keep ownership, subscriptions and inventory barriers alive until both
           // lanes settle, including a second receipt after the first lane fails.
           await Promise.all(this.tasks.values());
+          await Promise.all(this.expansionObservers);
+          await this.inventoryRecovery;
         }
       });
     } catch (error) { this.fail(error); }
     finally {
       this.finishStopped();
       this.world?.dispose(); this.world = undefined; this.configs = {}; this.working = false;
+      this.reconnectAt = null; this.identity = undefined;
       this.saving = undefined; this.debits.clear(); this.pendingSources.clear(); this.pendingTargets.clear(); this.attackReservations.clear();
+      this.expansionStock.clear(); this.expansionPending.clear(); this.inventoryDirty.clear(); this.expansionFleets.clear();
       for (const mode of modes) if (this.states[mode].running) {
         this.states[mode].running = false; this.states[mode].queue = []; this.states[mode].nextScanAt = null; this.emit(mode);
       }
     }
   }
-  private budgets(snapshot: WorldSnapshot) {
-    const budgets = availableBudgets(snapshot, this.activeConfigs(), this.debits);
+  private budgets(snapshot: WorldSnapshot, sources?: Set<bigint>) {
+    const stock = new Map(snapshot.budgets);
+    // A local upper bound permits another launch from the same source without
+    // subtracting an already-applied send from the live cache a second time.
+    for (const [id, left] of this.expansionStock) stock.set(id, Math.min(stock.get(id) ?? 0, left));
+    const budgets = availableBudgets({ ...snapshot, budgets: stock, owned: sources ? snapshot.owned.filter(p => sources.has(p.planetId)) : snapshot.owned }, this.activeConfigs(), this.debits);
     // The cache may already reflect a launch before its acknowledgement/barrier.
     // Only these unsynchronized sources wait; other sources remain independent.
     for (const id of this.pendingSources) budgets.set(id, 0);
@@ -133,6 +173,9 @@ export class Commander {
     // Legacy adapters release settled debits at the scan barrier. Never clear an
     // in-flight debit when the other lane performs a periodic coverage scan.
     for (const id of this.debits.keys()) if (!this.pendingSources.has(id)) this.debits.delete(id);
+    if (!this.world?.syncInventory) for (const id of this.inventoryDirty) if (!this.expansionPending.has(id)) {
+      this.expansionStock.delete(id); this.inventoryDirty.delete(id);
+    }
     this.supplies = this.supplies.filter(s => s.deliveries.some(d => Date.now() < d.arrival + 5000));
     const owned = new Set((snapshot.allOwned ?? snapshot.owned).map(p => p.planetId));
     for (const [id, flight] of this.flights) {
@@ -155,18 +198,37 @@ export class Commander {
     return { count: pending.reduce((n, s) => n + s.count, 0), arrival: Math.max(Date.now(), ...pending.map(s => s.arrival)) };
   }
   private flightCount(mode: Mode) { return [...this.flights.values()].filter(f => f.mode === mode).length + (mode === 'attack' ? this.supplies.length : 0); }
+  private planned(mode: Mode) {
+    if (!this.scanPlans.delete(mode) || this.scanPlans.size) return;
+    // Coverage and planning form one scan round. Receipts and draining its queue
+    // are deliberately outside this clock.
+    this.nextScan = Date.now() + Math.min(...this.activeConfigs().map(c => c.settings.scanMs));
+    for (const active of modes) if (this.configs[active]) {
+      this.states[active].nextScanAt = this.nextScan;
+      this.emit(active);
+    }
+  }
   private async tick() {
     const world = this.world!;
+    this.retryInventory(world);
+    if (document.visibilityState === 'hidden') this.planned('attack');
     if (Date.now() >= this.nextScan || world.needsScan?.()) {
       const revision = this.revision, configs = this.activeConfigs();
       const settings = { ...configs[0].settings, radius: Math.max(...configs.map(c => c.settings.radius)) };
+      this.interruptWaiting();
+      this.nextScan = Infinity; this.scanPlans.clear();
+      for (const mode of modes) if (this.configs[mode]) { this.states[mode].queue = []; this.states[mode].nextScanAt = null; }
+      this.expansionFleets.clear();
       world.configure?.(configs);
       for (const mode of modes) if (this.configs[mode]) this.emit(mode, '正在扫描战区星球、舰队与科技覆盖…', 'scanning');
       this.scanning = true;
       try { await world.scan(settings, () => this.active); } finally { this.scanning = false; }
       if (!this.active || revision !== this.revision) return;
       this.coveredRevision = revision;
-      const snapshot = world.read(); this.reconcile(snapshot);
+      const snapshot = world.read();
+      if (this.identity !== undefined && snapshot.identity !== this.identity) { this.fail(new Error('游戏身份已变化，已停止；请重新手动启动。')); return; }
+      this.identity ??= snapshot.identity;
+      this.reconcile(snapshot);
       if (this.configs.attack && this.states.attack.lastScanAt === null) {
         const issue = attackStartupIssue(snapshot, this.configs.attack);
         if (issue) {
@@ -179,31 +241,36 @@ export class Commander {
           return; // Rescan remaining expansion coverage before any new dispatch.
         }
       }
-      this.nextScan = Date.now() + Math.min(...configs.map(c => c.settings.scanMs));
+      this.scanPlans = new Set(modes.filter(mode => this.configs[mode] && (mode === 'expansion' || document.visibilityState !== 'hidden')));
       for (const mode of modes) if (this.configs[mode]) {
         const state = this.states[mode];
-        state.lastScanAt = Date.now(); state.nextScanAt = this.nextScan;
+        state.lastScanAt = Date.now(); state.nextScanAt = null;
         state.ownedCount = snapshot.owned.filter(p => inZone(p, this.configs[mode]!.policy.zone)).length;
         this.emit(mode, `扫描完成：战区内 ${state.ownedCount} 颗己方星球，开始评估目标`, 'scanning');
       }
       this.nextPlan = { expansion: 0, attack: 0 };
     }
-    if (!this.active || document.visibilityState === 'hidden') return;
+    if (!this.active) return;
     // Attack reserves its concrete planned amounts before expansion reads the
     // common budget. Neither lane waits for the other lane's cooldown or receipt.
     for (const mode of ['attack', 'expansion'] as const) {
       const config = this.configs[mode];
-      if (!config || this.tasks.has(mode) || Date.now() < this.nextPlan[mode]) continue;
+      if (!config || mode === 'attack' && document.visibilityState === 'hidden' || this.tasks.has(mode) || Date.now() < this.nextPlan[mode]) continue;
       const controller = new AbortController(); this.cancellations.set(mode, controller);
-      const task = this.runLane(mode, config, controller.signal).catch(error => this.fail(error)).finally(() => {
-        this.tasks.delete(mode); this.cancellations.delete(mode); this.finishStopped(); if (!this.active || !this.configs[mode]) this.wake?.();
+      const task = this.runLane(mode, config, controller.signal).catch(error => mode === 'expansion' ? this.recover(error) : this.fail(error)).finally(() => {
+        this.tasks.delete(mode); this.cancellations.delete(mode); this.finishStopped();
+        if (!this.active || !this.configs[mode] || mode === 'expansion' && this.states.expansion.queue.length) this.wake?.();
       });
       this.tasks.set(mode, task);
     }
   }
   private async runLane(mode: Mode, config: ModeConfig, signal: AbortSignal) {
     const world = this.world!, planningRevision = this.revision, inventoryRevision = this.inventoryRevision;
-    const current = () => !signal.aborted && this.configs[mode] === config && !this.failure && planningRevision === this.revision && document.visibilityState !== 'hidden';
+    const current = () => !signal.aborted && this.configs[mode] === config && !this.failure && this.reconnectAt === null && planningRevision === this.revision && (mode === 'expansion' || document.visibilityState !== 'hidden');
+    if (mode === 'expansion' && this.states.expansion.queue.length) {
+      await this.executeJob(mode, config, signal, current, this.states.expansion.queue[0]);
+      return;
+    }
     const snapshot = world.read(), configs = this.activeConfigs();
     const budgets = this.budgets(snapshot);
     const locked = new Set([...this.flights.keys(), ...this.pendingTargets]);
@@ -251,16 +318,57 @@ export class Commander {
       const idle = proposals.sources.filter(source => !assigned.has(source.sourceId)).sort((a, b) => b.available - a.available).slice(0, 6);
       this.states.expansion.planning = { sources: proposals.sources.length, ready: proposals.readySources, assigned: assigned.size, idle };
       this.states.expansion.queue = plan.jobs; this.states.expansion.exact = plan.exact; this.states.expansion.candidateCount = proposals.candidates;
+      this.expansionFleets = new Map(plan.jobs.map(job => [job.targetId, fleetState(snapshot, job.targetId)]));
       expansion = plan.jobs[0];
       if (!expansion) this.emit('expansion', `暂无可执行扩张：${proposals.readySources}/${proposals.sources.length} 颗来源可出兵；${idle[0]?.reason ?? '战区内暂无己方来源'}`, 'waiting');
     }
     if (!current()) return;
+    this.planned(mode);
     this.states[mode].flights = this.flightCount(mode); this.emit(mode);
     this.nextPlan[mode] = Date.now() + (inventoryRevision === this.inventoryRevision ? 1000 : 0);
     const job = mode === 'attack' ? attack : expansion;
     if (!job) return;
+    await this.executeJob(mode, config, signal, current, job);
+  }
+  private async executeJob(mode: Mode, config: ModeConfig, signal: AbortSignal, current: () => boolean, job: Assignment) {
+    const world = this.world!;
     const dispatchRevision = this.revision;
     this.emit(mode, `准备${job.kind === 'reinforce' ? '集结 ' : ' '}${sourceLabel(job)} → #${job.targetId}，共 ${totalCount(job)} 探针；等待操作间隔`, 'queued');
+    if (mode === 'expansion') {
+      this.expansionDelay ||= expansionInterval(config.settings.intervalMs);
+      try {
+        await dispatchExpansion(() => {
+          const fresh = world.read();
+          if (!current() || this.scanning || this.coveredRevision !== dispatchRevision || this.flights.has(job.targetId) || this.pendingTargets.has(job.targetId)) return null;
+          const target = fresh.planets.find(p => p.planetId === job.targetId);
+          if (!target || target.ownerId != null || !inZone(target, config.policy.zone) || this.expansionFleets.get(job.targetId) !== fleetState(fresh, job.targetId)) return null;
+          const contributions = members(job), available = this.budgets(fresh, new Set(contributions.map(m => m.sourceId)));
+          if (contributions.some(m => !fresh.owned.some(p => p.planetId === m.sourceId && inZone(p, config.policy.zone))
+            || m.count > Math.max(0, (available.get(m.sourceId) ?? 0) - (this.attackReservations.get(m.sourceId) ?? 0)))) return null;
+          return () => {
+            for (const m of contributions) {
+              this.expansionStock.set(m.sourceId, Math.min(fresh.budgets.get(m.sourceId) ?? 0, this.expansionStock.get(m.sourceId) ?? Infinity) - m.count);
+              this.expansionPending.set(m.sourceId, (this.expansionPending.get(m.sourceId) ?? 0) + 1);
+            }
+            this.inventoryRevision++; this.expansionDelay = 0;
+            this.flights.set(job.targetId, { mode, job, due: Date.now() + Math.max(60000, completionMs(job) + 15000) });
+            this.states.expansion.sent += contributions.length;
+            this.states.expansion.flights = this.flightCount(mode);
+            this.states.expansion.queue = this.states.expansion.queue.filter(queued => queued !== job);
+            let receipt: Promise<void>;
+            try { receipt = job.support?.length ? world.launchGroup!(job) : world.launch(job.sourceId, job.targetId, job.count); }
+            catch (error) { receipt = Promise.reject(error); }
+            this.emit(mode, `已提交发射 → #${job.targetId}；后台确认，继续下一项`, 'sent');
+            const observer = this.observeExpansion(world, config, job, receipt).finally(() => this.expansionObservers.delete(observer));
+            this.expansionObservers.add(observer);
+          };
+        }, this.expansionDelay, current, signal);
+      } finally {
+        this.states.expansion.queue = this.states.expansion.queue.filter(queued => queued !== job);
+        this.nextPlan.expansion = 0;
+      }
+      return;
+    }
     let actual: Assignment | undefined;
     let supplyDeliveries: { count: number; travelMs: number }[] = [];
     try { await dispatch(() => {
@@ -269,18 +377,10 @@ export class Commander {
       const target = fresh.planets.find(p => p.planetId === job.targetId);
       if (!target || !inZone(target, config.policy.zone)) return null;
       const available = this.budgets(fresh);
-      if (mode === 'expansion') for (const [id, count] of this.attackReservations) available.set(id, Math.max(0, (available.get(id) ?? 0) - count));
       if (members(job).some(m => !fresh.owned.some(p => p.planetId === m.sourceId && inZone(p, config.policy.zone)))) return null;
       const source = fresh.owned.find(p => p.planetId === job.sourceId)!;
-      const groupBudgets = new Map(available);
-      // A newly affordable solo may replace a coalition, but cannot consume troops that
-      // the current expansion plan needs for another target.
-      if (mode === 'expansion' && job.support?.length) for (const other of this.states.expansion.queue) {
-        if (other.targetId !== job.targetId) for (const m of members(other)) groupBudgets.set(m.sourceId, Math.max(0, (groupBudgets.get(m.sourceId) ?? 0) - m.count));
-      }
       const refreshed = job.kind === 'reinforce' ? this.offensive.refresh(world, fresh, config, available, job)
-        : mode === 'attack' ? attackQuote(world, fresh, source, target, config)
-        : job.support?.length ? refreshGroup(world, fresh, job, groupBudgets, config.settings) : expansionQuote(world, fresh, source, target, config);
+        : attackQuote(world, fresh, source, target, config);
       if (!refreshed || members(refreshed).some(m => m.count > (available.get(m.sourceId) ?? 0))) return null;
       actual = refreshed;
       for (const m of members(actual)) {
@@ -294,7 +394,7 @@ export class Commander {
         this.emit(mode, `正在${refreshed.kind === 'reinforce' ? `集结 ${members(refreshed).length} 颗来源` : '发送'} → #${refreshed.targetId}，${totalCount(refreshed)} 探针；等待服务器确认`, 'sending');
         return refreshed.support?.length ? world.launchGroup!(refreshed) : world.launch(refreshed.sourceId, refreshed.targetId, refreshed.count);
       };
-    }, interval, current, mode, signal);
+    }, config.settings.intervalMs, current, mode, signal);
     if (actual) {
       if (actual.kind === 'reinforce') this.supplies.push({ hub: actual.targetId, deliveries: supplyDeliveries.map(s => ({ count: s.count, arrival: Date.now() + s.travelMs })) });
       else this.flights.set(actual.targetId, { mode, job: actual, due: Date.now() + completionMs(actual) });
@@ -317,5 +417,42 @@ export class Commander {
       }
       this.nextPlan[mode] = 0;
     }
+  }
+  private async observeExpansion(world: ExpansionWorld, config: ModeConfig, job: Assignment, receipt: Promise<void>) {
+    const active = () => this.configs.expansion === config && !this.failure;
+    try {
+      await within(receipt, 15000);
+      const flight = this.flights.get(job.targetId);
+      if (flight?.job === job) flight.due = Date.now() + completionMs(job);
+      if (active()) this.emit('expansion', `已确认发射 → #${job.targetId}；等待抵达和占领确认`, 'sent');
+    } catch (error) {
+      if (active()) this.emit('expansion', `发射回执未确认 → #${job.targetId}：${error instanceof Error ? error.message : String(error)}；已跳过，继续其他目标`, 'waiting');
+    }
+    const sources = members(job).map(m => m.sourceId);
+    let synchronized = false;
+    try {
+      if (world.syncInventory) { await within(world.syncInventory(sources), 12000); synchronized = true; }
+    } catch {
+      if (active()) this.emit('expansion', '库存同步暂不可用，保留本地扣账并在后台重试；其他任务继续', 'waiting');
+    } finally {
+      for (const id of sources) {
+        const remaining = (this.expansionPending.get(id) ?? 1) - 1;
+        if (remaining) this.expansionPending.set(id, remaining); else this.expansionPending.delete(id);
+        if (synchronized && !remaining) { this.expansionStock.delete(id); this.inventoryDirty.delete(id); }
+        else this.inventoryDirty.add(id);
+      }
+      this.inventoryRevision++; this.nextPlan = { expansion: 0, attack: 0 };
+      if (!this.active || this.states.expansion.queue.length) this.wake?.();
+    }
+  }
+  private retryInventory(world: ExpansionWorld) {
+    if (!world.syncInventory || this.inventoryRecovery || Date.now() < this.nextInventoryRetry) return;
+    const sources = [...this.inventoryDirty].filter(id => !this.expansionPending.has(id)).slice(0, 24);
+    if (!sources.length) return;
+    this.nextInventoryRetry = Date.now() + 5000;
+    this.inventoryRecovery = within(world.syncInventory(sources), 12000).then(() => {
+      for (const id of sources) if (!this.expansionPending.has(id)) { this.expansionStock.delete(id); this.inventoryDirty.delete(id); }
+      this.inventoryRevision++; this.nextPlan = { expansion: 0, attack: 0 }; this.wake?.();
+    }, () => { /* Retain conservative local stock and retry later without resending. */ }).finally(() => { this.inventoryRecovery = undefined; });
   }
 }

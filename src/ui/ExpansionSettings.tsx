@@ -10,7 +10,7 @@ interface Props {
 const numericFields = [
   { key: 'candidates', label: '每颗星球的候选数 n（1–50）', min: 1, max: 50, step: 1 },
   { key: 'radius', label: '最大搜索距离（1–128）', min: 1, max: 128, step: 1 },
-  { key: 'intervalMs', label: '操作间隔（秒，1–2）', min: 1, max: 2, step: 0.1 },
+  { key: 'intervalMs', label: '操作基准间隔（秒，1–2，随机 ±0.2 秒）', min: 1, max: 2, step: 0.1 },
   { key: 'horizonMs', label: '向未来规划多久（秒，非扫描间隔）', min: 10, max: 600, step: 1 },
   { key: 'reserve', label: '每颗星球留守探针', min: 0, max: 0xffffffff, step: 1 },
 ] as const;
@@ -27,6 +27,7 @@ export function ExpansionSettings({ value, disabled, onChange, attack = false }:
       <input id={id(key)} type="number" {...bounds} disabled={disabled} value={value[key]} onChange={event => onChange(key, event.target.value)} />
     </div>)}
     {attack && <p>进攻操作间隔固定为 1 秒，使用独立队列；等待本模式发射确认和库存同步后再执行下一项。</p>}
+    {!attack && <p>设为 1.2 秒时，每次间隔随机为 1.0～1.4 秒，最短 1 秒。不等待发射回执；超时跳过并继续，库存后台同步。</p>}
     <>
       <label htmlFor={id("maxTravelMs")}>{attack ? "进攻最长航行时间（秒，默认 1800＝30 分钟）" : "最长航行时间（秒，默认 1800＝30 分钟）"}</label>
       <input id={id("maxTravelMs")} type="number" min={10} max={14400} step={1} disabled={disabled} value={value.maxTravelMs} onChange={event => onChange('maxTravelMs', event.target.value)} />
