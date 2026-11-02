@@ -1,4 +1,4 @@
-import { scanIntervals, type ExpansionSettings as Settings } from '../features/expansion/types';
+import { maxCoalitionSources, scanIntervals, type ExpansionSettings as Settings } from '../features/expansion/types';
 import type { SettingsForm } from '../app/settings';
 
 interface Props {
@@ -32,10 +32,9 @@ export function ExpansionSettings({ value, disabled, onChange, attack = false }:
       <input id={id("maxTravelMs")} type="number" min={10} max={14400} step={1} disabled={disabled} value={value.maxTravelMs} onChange={event => onChange('maxTravelMs', event.target.value)} />
       <p>规划 120 秒表示安排近期要发出的队列，不要求两分钟内抵达。近程先发，后方来源也可执行较远任务；搜索距离与固定区域仍生效。</p>
     </>
-    {!attack && <><label htmlFor="maxSources">每个目标最多协同星球数</label>
-    <select id="maxSources" disabled={disabled} value={value.maxSources} onChange={event => onChange('maxSources', event.target.value)}>
-      <option value="1">1 颗（仅单星）</option><option value="2">2 颗</option><option value="3">3 颗</option>
-    </select>
+    {!attack && <><label htmlFor="maxSources">每个目标最多协同星球数（1–{maxCoalitionSources}）</label>
+    <input id="maxSources" type="number" min={1} max={maxCoalitionSources} step={1} disabled={disabled} value={value.maxSources} onChange={event => onChange('maxSources', event.target.value)} />
+    <p>默认 3 颗，填 1 表示仅单星。优先用更少来源完成占领，不会为了凑够设置数量而拆兵。</p>
     <p>协同来源彼此距离不超过 8，预计抵达时间相差不超过 15 秒。一次批量派兵，计一次扩张队列操作。</p></>}
     <p>两个模式使用独立队列和操作间隔，共享兵力预算；覆盖扫描采用较快的周期。</p>
   </>;

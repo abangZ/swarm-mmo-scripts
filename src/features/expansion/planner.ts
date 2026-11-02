@@ -1,4 +1,4 @@
-import { completionMs, members, totalCount, type Assignment, type Plan } from './types';
+import { completionMs, maxCoalitionSources, members, totalCount, type Assignment, type Plan } from './types';
 import { finishPlanning } from '../../runtime/planning';
 
 // All jobs have the same capture horizon: longest trips have the earliest launch deadlines.
@@ -33,7 +33,7 @@ export function* expansionPlanSteps(edges: Assignment[], budgets: Map<bigint, nu
   for (const [index, edge] of edges.entries()) {
     if (index % 128 === 0) yield;
     const contributions = members(edge);
-    if (contributions.length > 3 || new Set(contributions.map(m => m.sourceId)).size !== contributions.length) continue;
+    if (contributions.length > maxCoalitionSources || new Set(contributions.map(m => m.sourceId)).size !== contributions.length) continue;
     if (contributions.some(m => !Number.isSafeInteger(m.count) || m.count < 1 || !Number.isFinite(m.travelMs) || m.travelMs < 0 || m.travelMs > (maxTravelMs ?? horizon) || m.count > (budgets.get(m.sourceId) ?? 0))) continue;
     const options = targets.get(edge.targetId) ?? [];
     options.push(edge); targets.set(edge.targetId, options);

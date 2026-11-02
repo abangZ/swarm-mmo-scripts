@@ -1,7 +1,7 @@
 import type { ExpansionWorld, WorldSnapshot } from './world';
 import { fleetsFor } from './world';
 import { captureMargin, members, type Assignment, type ExpansionSettings } from './types';
-import { coalitionOptions, combinations, validRoute, type GroupSource } from './cooperation';
+import { coalitionOptions, cooperationGroups, validRoute, type GroupSource } from './cooperation';
 import type { Planet } from '../../game/types';
 import type { ModeConfig } from '../commander/types';
 import { inZone } from '../commander/types';
@@ -127,10 +127,10 @@ export function* expansionProposalSteps(world: ExpansionWorld, snapshot: WorldSn
   }
   for (const { target, sources } of groups.values()) {
     yield;
-    const fastest = [...sources].sort((a, b) => a.travelMs - b.travelMs);
-    const strongest = [...sources].sort((a, b) => b.available * (100 - b.lossPct) - a.available * (100 - a.lossPct));
-    const picked = [...new Map([...fastest.slice(0, 3), ...strongest.slice(0, 3)].map(s => [s.planet.planetId, s])).values()];
-    for (let size = 2; size <= settings.maxSources; size++) for (const group of combinations(picked, size)) edges.push(...coalitionOptions(target, group, { ...settings, horizonMs: settings.maxTravelMs }).map(job => ({ ...job, value: value(target, Math.max(job.travelMs, ...(job.support ?? []).map(m => m.travelMs))) })));
+    for (const group of cooperationGroups(sources, settings.maxSources)) {
+      yield;
+      edges.push(...coalitionOptions(target, group, { ...settings, horizonMs: settings.maxTravelMs }).map(job => ({ ...job, value: value(target, Math.max(job.travelMs, ...(job.support ?? []).map(m => m.travelMs))) })));
+    }
   }
   const ready = new Set<bigint>();
   for (const [i, job] of edges.entries()) {
