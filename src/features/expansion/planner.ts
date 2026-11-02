@@ -21,8 +21,8 @@ export function planExpansion(edges: Assignment[], budgets: Map<bigint, number>,
   return finishPlanning(expansionPlanSteps(edges, budgets, interval, horizon, maxTravelMs));
 }
 export function* expansionPlanSteps(edges: Assignment[], budgets: Map<bigint, number>, interval: number, horizon: number, maxTravelMs?: number): Generator<void, Plan> {
-  // Expansion uses a dispatch window, independent of the maximum journey time.
-  // The default retains the arrival-deadline semantics used by hostile attacks.
+  // Both modes pass a journey cap and use an independent dispatch window.
+  // Omitting the cap retains the legacy arrival-deadline API for existing callers.
   const rapid = maxTravelMs !== undefined;
   const order = (jobs: Assignment[]) => {
     if (!rapid) return schedule(jobs, interval, horizon);

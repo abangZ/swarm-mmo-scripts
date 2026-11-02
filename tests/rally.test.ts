@@ -15,7 +15,7 @@ function army() {
   const target = planet(2n, 1, 0); target.level = 1; target.probeCount = 1000; target.ownerId = { toHexString: () => enemy }; target.lastUpdateTick = { toMillis: () => Date.now() };
   const donors = Array.from({ length: 300 }, (_, i) => { const p = planet(BigInt(i + 10), 5 + i % 30, 5 + Math.floor(i / 30), true); p.level = 1; p.probeCount = 10; return p; });
   const snapshot: WorldSnapshot = { planets: [hub, target, ...donors], owned: [hub, ...donors], identity: 'me', allies: new Set(['me']), intelligence: true, fleets: [], incoming: new Set(), automated: new Set(), budgets: new Map([[1n, 100], ...donors.map(p => [p.planetId, 10] as [bigint, number])]) };
-  const config: ModeConfig = { settings: { ...defaults, maxSources: 1 }, policy: { ...defaultPolicy, zone: { x: 0, y: 0, radius: 64 }, rallyId: '1', frontlinePercent: 0 } };
+  const config: ModeConfig = { settings: { ...defaults, maxSources: 1, maxTravelMs: 120000 }, policy: { ...defaultPolicy, zone: { x: 0, y: 0, radius: 64 }, rallyId: '1', frontlinePercent: 0 } };
   const world: ExpansionWorld = {
     scan: mock.fn(async () => {}), read: () => snapshot,
     quote: (source, id) => { const p = snapshot.planets.find(p => p.planetId === id)!; return (snapshot.budgets.get(source) ?? 0) >= p.probeCount + 1 ? { count: p.probeCount + 3, travelMs: 5000 } : null; },
@@ -55,7 +55,7 @@ test('long-range expansion shares reserved donor stock with an independent rally
   };
   f.world.syncInventory = async () => {};
   const commander = new Commander(() => {}, () => f.world);
-  const run = commander.start('expansion', f.config); commander.start('attack', f.config);
+  const run = commander.start('expansion', { ...f.config, settings: { ...f.config.settings, maxTravelMs: defaults.maxTravelMs } }); commander.start('attack', f.config);
   await settle(); t.mock.timers.tick(250); await settle();
   for (let i = 0; i < 3; i++) { t.mock.timers.tick(1500); await settle(); }
   commander.stop(); t.mock.timers.tick(500); await run;

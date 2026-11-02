@@ -74,7 +74,7 @@ test('waiting logs are deduplicated and history stays bounded across scans', asy
     t.mock.timers.tick(10000); await settle();
   }
   const latest = controller.getSnapshot();
-  assert.equal(latest.logs.length, 100);
+  assert.equal(latest.logs.length, 50);
   assert.ok(latest.logs[0].id > first.logs[0].id);
   assert.equal(latest.logs.at(-1)!.message, latest.expansion.phase);
   controller.stop(); t.mock.timers.tick(500); await settle(); controller.dispose();

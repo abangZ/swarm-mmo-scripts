@@ -23,15 +23,15 @@ export function ExpansionSettings({ value, disabled, onChange, attack = false }:
       {scanIntervals.map(ms => <option key={ms} value={ms / 1000}>{ms / 1000} 秒</option>)}
     </select>
     {numericFields.filter(field => !attack || field.key !== 'intervalMs').map(({ key, label, ...bounds }) => <div key={key}>
-      <label htmlFor={id(key)}>{key === 'horizonMs' && !attack ? '规划队列窗口（秒，不限制航行时间）' : label}</label>
+      <label htmlFor={id(key)}>{key === 'horizonMs' ? '规划队列窗口（秒，不限制航行时间）' : label}</label>
       <input id={id(key)} type="number" {...bounds} disabled={disabled} value={value[key]} onChange={event => onChange(key, event.target.value)} />
     </div>)}
     {attack && <p>进攻操作间隔固定为 1 秒，使用独立队列；等待本模式发射确认和库存同步后再执行下一项。</p>}
-    {!attack && <>
-      <label htmlFor="maxTravelMs">最长航行时间（秒，默认 1800＝30 分钟）</label>
-      <input id="maxTravelMs" type="number" min={10} max={14400} step={1} disabled={disabled} value={value.maxTravelMs} onChange={event => onChange('maxTravelMs', event.target.value)} />
+    <>
+      <label htmlFor={id("maxTravelMs")}>{attack ? "进攻最长航行时间（秒，默认 1800＝30 分钟）" : "最长航行时间（秒，默认 1800＝30 分钟）"}</label>
+      <input id={id("maxTravelMs")} type="number" min={10} max={14400} step={1} disabled={disabled} value={value.maxTravelMs} onChange={event => onChange('maxTravelMs', event.target.value)} />
       <p>规划 120 秒表示安排近期要发出的队列，不要求两分钟内抵达。近程先发，后方来源也可执行较远任务；搜索距离与固定区域仍生效。</p>
-    </>}
+    </>
     {!attack && <><label htmlFor="maxSources">每个目标最多协同星球数</label>
     <select id="maxSources" disabled={disabled} value={value.maxSources} onChange={event => onChange('maxSources', event.target.value)}>
       <option value="1">1 颗（仅单星）</option><option value="2">2 颗</option><option value="3">3 颗</option>

@@ -77,7 +77,7 @@ test('saving expires instead of starving expansion forever', async t => {
   const f = fixture(false); f.snapshot.budgets.set(1n, 20);
   const run = f.commander.start('expansion', config()); f.commander.start('attack', config());
   await settle(); t.mock.timers.tick(250); await settle();
-  t.mock.timers.tick(120001); await settle();
+  t.mock.timers.tick(120001); await settle(); t.mock.timers.tick(250); await settle();
   assert.equal(f.launches.length, 1); assert.equal(f.launches[0].target, 2n);
   f.commander.stop(); t.mock.timers.tick(500); await run;
 });
@@ -147,7 +147,7 @@ test('one overlapping source can fund expansion and attack concurrently without 
   f.commander.stop(); t.mock.timers.tick(500); await run;
 });
 
-test('attack retains arrival deadlines and longest-first scheduling independently of the expansion journey cap', () => {
+test('attack dispatch window and journey cap are independent and shorter journeys go first', () => {
   const f = fixture(false);
   for (const id of [10n, 11n]) {
     const target = planet(id, Number(id - 7n), 0); target.level = 1; target.ownerId = f.hostile.ownerId;
@@ -156,9 +156,9 @@ test('attack retains arrival deadlines and longest-first scheduling independentl
   const times = new Map([[9n, 10000], [10n, 110000], [11n, 180000]]);
   f.world.route = (_source, target) => ({ travelMs: times.get(target)!, lossPct: 0 });
   f.world.quote = (_source, target) => ({ count: 12, travelMs: times.get(target)! });
-  const attackConfig = config(); attackConfig.settings.maxTravelMs = 10000;
+  const attackConfig = config(); attackConfig.settings.maxTravelMs = 120000;
   const plan = planAttack(f.world, f.snapshot, attackConfig, f.snapshot.budgets, new Set());
-  assert.deepEqual(plan.jobs!.map(job => job.targetId), [10n, 9n]);
+  assert.deepEqual(plan.jobs!.map(job => job.targetId), [9n, 10n]);
 });
 
 test('shared sources retain inventory barriers and dynamic guards with separate lane intervals', async t => {
@@ -302,10 +302,11 @@ test('an unknown lane stops new sends while the other already-sent receipt retai
 
 test('attack keeps its one-second cadence while expansion is still yielding through a large plan', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
-  let clock = 0; t.mock.method(performance, 'now', () => clock += 10);
+  let clock = 0; t.mock.method(performance, 'now', () => clock);
   const f = fixture();
   for (let i = 0; i < 420; i++) { const p = planet(BigInt(1000 + i), i % 5, 2, true); f.snapshot.planets.push(p); f.snapshot.owned.push(p); f.snapshot.budgets.set(p.planetId, 100); }
   for (const id of [10n, 11n, 12n]) { const p = planet(id, 102 + Number(id - 10n), 0); p.level = 1; p.ownerId = f.hostile.ownerId; f.snapshot.planets.push(p); }
+  const quote = f.world.quote; f.world.quote = (source, target) => { if (target === 2n) clock += 10; return quote(source, target); };
   const run = f.commander.start('expansion', config()); f.commander.start('attack', config(100)); await settle();
   for (let i = 0; i < 13; i++) { t.mock.timers.tick(250); await settle(); }
   assert.equal(f.commander.states.expansion.sent, 0, 'expansion has not completed its first sliced plan');

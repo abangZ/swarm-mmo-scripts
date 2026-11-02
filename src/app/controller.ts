@@ -4,6 +4,7 @@ import type { ExpansionWorld } from '../features/expansion/world';
 import type { ExpansionSettings } from '../features/expansion/types';
 import { Commander } from '../features/commander/engine';
 import { inZone, type Mode } from '../features/commander/types';
+import { attackStartupIssue } from '../features/attack/diagnostics';
 import { hostile } from '../features/commander/safety';
 import { unresolved, unlockAfterReview } from '../runtime/operations';
 import { loadSettings, parseSettings, saveSettings, type SettingsForm } from './settings';
@@ -54,8 +55,10 @@ export class AppController {
     const level: ActivityLog['level'] = state.activity === 'error' ? 'error'
       : state.activity === 'paused' || state.activity === 'stopping' ? 'warning'
       : state.activity === 'sent' || state.activity === 'captured' ? 'success' : 'info';
-    const logs = changed ? [...this.state.logs, { id: ++this.logId, time: Date.now(), message: state.phase, level, mode }].slice(-100) : this.state.logs;
-    this.patch({ [mode]: state, uncertain: unresolved(), logs });
+    const modeLogs = this.state.logs.filter(log => log.mode === mode);
+    const retained = modeLogs.length >= 50 ? this.state.logs.filter(log => log.id !== modeLogs[0].id) : this.state.logs;
+    const logs = changed ? [...retained, { id: ++this.logId, time: Date.now(), message: state.phase, level, mode }].slice(-100) : this.state.logs;
+    this.patch({ [mode]: state, uncertain: unresolved(), logs, ...(mode === 'attack' && state.activity === 'error' && !state.running ? { attackSettingsOpen: true } : {}) });
   }
   expand = (): void => { this.patch({ expanded: true }); };
   collapse = (): void => { this.patch({ expanded: false }); };
@@ -118,7 +121,7 @@ export class AppController {
         enemy.count++; enemies.set(id, enemy);
       }
       const hubs = snapshot.owned.filter(p => inZone(p, config.policy.zone) && !snapshot.automated?.has(p.planetId)).map(p => ({ id: String(p.planetId), x: p.positionX, y: p.positionY, probes: snapshot.budgets.get(p.planetId) ?? 0 })).sort((a, b) => b.probes - a.probes);
-      this.patchPreview(mode, { busy: false, message: `区域内：己方 ${snapshot.owned.filter(p => inZone(p, config.policy.zone)).length} · 无主 ${planets.filter(p => !p.ownerId).length} · 敌方 ${[...enemies.values()].reduce((n, e) => n + e.count, 0)} 颗；${enemies.size} 位敌人`, enemies: [...enemies.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)), hubs });
+      this.patchPreview(mode, { busy: false, message: `区域内：己方 ${snapshot.owned.filter(p => inZone(p, config.policy.zone)).length} · 无主 ${planets.filter(p => !p.ownerId).length} · 敌方 ${[...enemies.values()].reduce((n, e) => n + e.count, 0)} 颗；${enemies.size} 位敌人${mode === 'attack' ? `。${attackStartupIssue(snapshot, config) ?? ''}` : ''}`, enemies: [...enemies.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)), hubs });
     } catch (error) { if (version === this.previewVersions[mode]) this.patchPreview(mode, { busy: false, message: errorText(error) }); }
     finally { world?.dispose(); if (world) this.previews.delete(world); }
   };

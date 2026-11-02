@@ -55,6 +55,11 @@ export function RegionSettings({ mode, value, preview, disabled, onChange, onPic
         {hubs.map(hub => <option key={hub.id} value={hub.id}>#{hub.id} · ({hub.x}, {hub.y}) · {hub.probes} 探针</option>)}
       </select>
       <button id={id('pick-hub')} className="locate-enemy" disabled={disabled} onClick={onPickHub}>用地图选中的己方行星作中转</button>
+      <label htmlFor={id('rallyHubs')}>同时集结据点数</label>
+      <select id={id('rallyHubs')} disabled={disabled || !!value.rallyId} value={value.rallyId ? '1' : value.rallyHubs} onChange={e => onChange('rallyHubs', e.target.value)}>
+        {[1, 2, 3].map(n => <option key={n} value={n}>{n} 个据点</option>)}
+      </select>
+      <p>自动选择先检查可进攻航线和已知来袭，再比较集结加进攻的总抵达时间。各据点按需分配余兵、轮流补给；指定中转星时仅使用该据点，附近直攻仍独立进行。</p>
       <label htmlFor={id('rallyMinutes')}>补给最长航行时间（分钟，1–240）</label>
       <input id={id('rallyMinutes')} type="number" min="1" max="240" disabled={disabled} value={value.rallyMinutes} onChange={e => onChange('rallyMinutes', e.target.value)} />
       <label htmlFor={id('advanceHub')}>攻下据点后</label>
@@ -69,6 +74,6 @@ export function RegionSettings({ mode, value, preview, disabled, onChange, onPic
       <div><label htmlFor={id('threatRadius')}>敌方警戒距离</label><input id={id('threatRadius')} type="number" min="1" max="128" disabled={disabled} value={value.threatRadius} onChange={e => onChange('threatRadius', e.target.value)} /></div>
       {mode === 'attack' && <div><label htmlFor={id('holdProbes')}>占领后留兵</label><input id={id('holdProbes')} type="number" min="2" max="1000000" disabled={disabled} value={value.holdProbes} onChange={e => onChange('holdProbes', e.target.value)} /></div>}
     </div>
-    <p>警戒距离内有敌人的来源提高留兵；已知来袭另外预留守军。启用游戏自动升级 / 转发的来源不参与派兵。</p>
+    <p>警戒距离内有敌人的来源提高留兵；已知来袭按抵达顺序逐波预留守军，仅抵扣留有一分钟缓冲的基础产兵，不提前计入在途补给。启用游戏自动升级 / 转发的来源不参与派兵。</p>
   </div>;
 }

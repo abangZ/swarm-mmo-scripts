@@ -9,7 +9,7 @@ export function hostile(p: Planet, snapshot: WorldSnapshot): boolean {
   const owner = p.ownerId?.toHexString();
   return !!owner && owner !== snapshot.identity && !snapshot.allies?.has(owner);
 }
-/** Upper bound: incoming Assault is at most 2x; do not credit our Defense or future production. */
+/** Cover every hostile arrival prefix at 2x Assault; only credit minimum level production. */
 export function reserveFor(p: Planet, snapshot: WorldSnapshot, configs: ModeConfig[], enemies = new PlanetIndex(snapshot.planets.filter(target => hostile(target, snapshot)))): number {
   const applicable = configs.filter(c => inZone(p, c.policy.zone));
   let reserve = Math.max(0, ...applicable.map(c => c.settings.reserve));
@@ -21,13 +21,23 @@ export function reserveFor(p: Planet, snapshot: WorldSnapshot, configs: ModeConf
       reserve = Math.max(reserve, Math.ceil(stock * c.policy.frontlinePercent / 100));
     }
   }
-  let incoming = 0;
+  const hostileFleets = [];
   for (const fleet of fleetsFor(snapshot, p.planetId)) {
     if (fleet.owner === snapshot.identity || snapshot.allies?.has(fleet.owner)) continue;
-    if (fleet.count === null || fleet.arrival === null) return Infinity;
-    incoming += fleet.count * 2;
+    if (fleet.count === null || fleet.arrival === null || !Number.isFinite(fleet.arrival) || !Number.isSafeInteger(fleet.count) || fleet.count < 0) return Infinity;
+    hostileFleets.push(fleet);
   }
-  return reserve + (incoming ? incoming + 2 : 0);
+  let cumulative = 0, requiredNow = 0;
+  const level = Number.isInteger(p.level) && p.level! >= 1 && p.level! <= 10 ? p.level! : 0;
+  const now = Date.now();
+  for (const fleet of hostileFleets.sort((a, b) => a.arrival! - b.arrival!)) {
+    cumulative += fleet.count! * 2;
+    // One full production tick of slack. No predicted tech, allied supplies, or
+    // uncaptured planets are counted; each earlier wave must also be survivable.
+    const production = Math.floor(Math.max(0, fleet.arrival! - now - 60000) / 60000) * level;
+    requiredNow = Math.max(requiredNow, cumulative + 2 - production);
+  }
+  return reserve + requiredNow;
 }
 export function availableBudgets(snapshot: WorldSnapshot, configs: ModeConfig[], debits: Map<bigint, number>): Map<bigint, number> {
   const enemies = new PlanetIndex(snapshot.planets.filter(target => hostile(target, snapshot)));

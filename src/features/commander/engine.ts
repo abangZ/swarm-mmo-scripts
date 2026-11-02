@@ -5,6 +5,7 @@ import type { ExpansionActivity, ExpansionState } from '../expansion/engine';
 import { expansionProposalSteps, expansionQuote, refreshGroup } from '../expansion/proposals';
 import { expansionPlanSteps } from '../expansion/planner';
 import { runPlanning } from '../../runtime/planning';
+import { attackStartupIssue } from '../attack/diagnostics';
 import { attackQuote } from '../attack/planner';
 import { OffensivePlanner, type Supply } from '../attack/rally';
 import { arriving } from '../expansion/cooperation';
@@ -73,7 +74,7 @@ export class Commander {
     for (const m of mode ? [mode] : modes) {
       delete this.configs[m];
       this.states[m].queue = [];
-      if (m === 'attack') { this.attackReservations.clear(); this.saving = undefined; this.savingCooldown = 0; this.offensive.reset(); this.states.attack.rally = undefined; }
+      if (m === 'attack') { this.attackReservations.clear(); this.saving = undefined; this.savingCooldown = 0; this.offensive.reset(); this.states.attack.rally = undefined; this.states.attack.rallies = undefined; }
       if (this.states[m].running) this.emit(m, '正在停止；已发射舰队仍继续航行', 'stopping');
     }
     this.revision++; this.nextScan = 0; this.nextPlan = { expansion: 0, attack: 0 }; this.interruptWaiting();
@@ -137,11 +138,11 @@ export class Commander {
     for (const [id, flight] of this.flights) {
       const state = this.states[flight.mode];
       if (owned.has(id)) {
-        state.captured++; this.flights.delete(id);
+        state.captured++; this.flights.delete(id); this.inventoryRevision++;
         if (flight.mode === 'attack' && this.configs.attack) this.offensive.captured(id, this.configs.attack);
         if (this.configs[flight.mode]) this.emit(flight.mode, `已确认占领 #${id}`, 'captured');
       } else if (Date.now() >= flight.due + 5000 && !snapshot.incoming.has(id)) {
-        state.missed++; this.flights.delete(id);
+        state.missed++; this.flights.delete(id); this.inventoryRevision++;
         if (this.configs[flight.mode]) this.emit(flight.mode, `舰队已结束航行，未确认占领 #${id}；重新评估`, 'waiting');
       }
     }
@@ -166,6 +167,18 @@ export class Commander {
       if (!this.active || revision !== this.revision) return;
       this.coveredRevision = revision;
       const snapshot = world.read(); this.reconcile(snapshot);
+      if (this.configs.attack && this.states.attack.lastScanAt === null) {
+        const issue = attackStartupIssue(snapshot, this.configs.attack);
+        if (issue) {
+          const state = this.states.attack;
+          state.ownedCount = snapshot.owned.filter(p => inZone(p, this.configs.attack!.policy.zone)).length;
+          state.lastScanAt = Date.now(); state.nextScanAt = null; state.running = false;
+          delete this.configs.attack; this.attackReservations.clear(); this.offensive.reset();
+          this.revision++; this.nextScan = 0; this.interruptWaiting();
+          this.emit('attack', issue, 'error');
+          return; // Rescan remaining expansion coverage before any new dispatch.
+        }
+      }
       this.nextScan = Date.now() + Math.min(...configs.map(c => c.settings.scanMs));
       for (const mode of modes) if (this.configs[mode]) {
         const state = this.states[mode];
@@ -199,14 +212,17 @@ export class Commander {
     const attackConfig = mode === 'attack' ? config : undefined;
     if (attackConfig) {
       const reserved = new Map<bigint, number>();
-      const planningConfig = attackConfig;
-      const plan = this.offensive.plan(world, snapshot, planningConfig, budgets, locked, hub => this.pendingSupply(hub), hub => ({
+      const draft = this.offensive.fork();
+      const plan = await runPlanning(draft.steps(world, snapshot, attackConfig, budgets, locked, hub => this.pendingSupply(hub), hub => ({
         percent: Math.max(0, ...configs.filter(c => inZone(hub, c.policy.zone)).map(c => c.policy.frontlinePercent)),
         deficit: Math.max(0, reserveFor(hub, snapshot, configs) - Math.max(0, (snapshot.budgets.get(hub.planetId) ?? 0) - (this.debits.get(hub.planetId) ?? 0))),
-      }));
+      })), () => current() && inventoryRevision === this.inventoryRevision, () => world.refreshQuotes?.());
+      if (!plan || !current() || inventoryRevision !== this.inventoryRevision) return;
+      this.offensive = draft;
       attack = plan.next;
       for (const [id, count] of plan.reservations) reserved.set(id, count);
-      this.states.attack.rally = plan.rallyState;
+      this.states.attack.rally = plan.rallyState; this.states.attack.rallies = plan.rallyStates;
+      this.states.attack.attackDiagnostics = plan.diagnostics;
       this.states.attack.candidateCount = plan.candidates;
       this.states.attack.exact = plan.exact ?? false;
       let savingJob: Assignment | undefined;
@@ -216,6 +232,7 @@ export class Commander {
         if (Date.now() >= this.saving.until) { this.saving = undefined; this.savingCooldown = Date.now() + 60000; }
         else if (this.saving.key === key) { savingJob = plan.saving; reserved.set(plan.saving.sourceId, plan.saving.count); }
       } else if (attack || !plan.saving) this.saving = undefined;
+      if (reserved.size !== this.attackReservations.size || [...reserved].some(([id, n]) => n !== this.attackReservations.get(id))) this.inventoryRevision++;
       this.attackReservations = reserved;
       this.states.attack.queue = plan.jobs ?? [];
       if (!attack) this.emit('attack', savingJob ? `正在为 #${savingJob.targetId} 攒兵：#${savingJob.sourceId} 需 ${savingJob.count}，当前可用 ${budgets.get(savingJob.sourceId) ?? 0}；最多预留 120 秒`

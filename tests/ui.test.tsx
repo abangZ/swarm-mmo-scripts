@@ -218,8 +218,16 @@ test('hub selection preserves bigint identity and never moves the fixed war zone
   const ui = await panel(controller);
   await ui.click('toggle'); await ui.click('tab-attack'); await ui.click('attack-pick-view');
   const zone = { x: controller.getSnapshot().policies.attack.x, y: controller.getSnapshot().policies.attack.y };
+  assert.equal(ui.element<HTMLInputElement>('attack-maxTravelMs').value, '1800');
+  assert.equal(ui.element<HTMLSelectElement>('attack-rallyHubs').value, '3');
+  await ui.select('attack-rallyHubs', '2');
   await ui.click('attack-pick-hub');
   assert.equal(ui.element<HTMLSelectElement>('attack-rallyId').value, id);
+  assert.equal(ui.element<HTMLSelectElement>('attack-rallyHubs').value, '1');
+  assert.equal(ui.element<HTMLSelectElement>('attack-rallyHubs').disabled, true);
+  await ui.select('attack-rallyId', '');
+  assert.equal(ui.element<HTMLSelectElement>('attack-rallyHubs').value, '2');
+  assert.equal(ui.element<HTMLSelectElement>('attack-rallyHubs').disabled, false);
   await ui.select('attack-advanceHub', 'no');
   assert.equal(controller.getSnapshot().policies.attack.advanceHub, 'no');
   assert.deepEqual({ x: controller.getSnapshot().policies.attack.x, y: controller.getSnapshot().policies.attack.y }, zone);

@@ -2,6 +2,7 @@ import type { Assignment, ExpansionSettings } from './types';
 import type { ExpansionWorld } from './world';
 import { Commander, idleState } from '../commander/engine';
 import { defaultPolicy } from '../commander/types';
+import type { AttackDiagnostics } from '../attack/diagnostics';
 import type { SourceReport } from './proposals';
 
 export type ExpansionActivity = 'idle' | 'starting' | 'scanning' | 'waiting' | 'queued' | 'sending' | 'sent' | 'captured' | 'paused' | 'stopping' | 'stopped' | 'error';
@@ -9,6 +10,8 @@ export interface ExpansionState {
   activity: ExpansionActivity; ownedCount: number; candidateCount: number; lastScanAt: number | null; nextScanAt: number | null;
   running: boolean; phase: string; queue: Assignment[]; flights: number; sent: number; captured: number; missed: number; exact: boolean;
   rally?: { hub: bigint; target: bigint; required: number; available: number; incoming: number; sources: number };
+  rallies?: NonNullable<ExpansionState['rally']>[];
+  attackDiagnostics?: AttackDiagnostics;
   planning?: { sources: number; ready: number; assigned: number; idle: SourceReport[] };
 }
 /** Compatibility facade; all execution is owned by the shared commander. */

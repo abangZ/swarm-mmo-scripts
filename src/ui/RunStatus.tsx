@@ -29,8 +29,13 @@ export function RunStatus({ state, uncertain, prefix = '' }: { state: ExpansionS
   return <div className="status-card">
     <div className="section-heading"><h3>当前动作</h3><StatusBadge state={state} uncertain={uncertain} /></div>
     <p id={`${prefix}auto-status`} className="auto-status" role="status" aria-live="polite">{state.phase}</p>
-    {state.rally && <div className="rally-status"><strong>中转星 #{String(state.rally.hub)} → 目标 #{String(state.rally.target)}</strong>
-      <p>中转可用 {state.rally.available} / 预计需要 {state.rally.required}<br />补给在途 {state.rally.incoming} · 待募集来源 {state.rally.sources} 颗</p>
+    {(state.rallies ?? (state.rally ? [state.rally] : [])).map(rally => <div className="rally-status" key={String(rally.hub)}><strong>中转星 #{String(rally.hub)} → 目标 #{String(rally.target)}</strong>
+      <p>中转可用 {rally.available} / 预计需要 {rally.required}<br />补给在途 {rally.incoming} · 待募集来源 {rally.sources} 颗</p>
+    </div>)}
+    {state.attackDiagnostics && <div className="expansion-progress">
+      <p>可用兵力 {state.attackDiagnostics.available} · 来源 {state.attackDiagnostics.sources} 颗（无预算 {state.attackDiagnostics.noBudget} 颗）</p>
+      <p>敌方目标 {state.attackDiagnostics.targets} · 在途 / 锁定 {state.attackDiagnostics.blocked} · 范围内无可选目标的来源 {state.attackDiagnostics.noTargets} 颗</p>
+      <p>检查路线：可直攻 {state.attackDiagnostics.feasible} · 航时超限 {state.attackDiagnostics.tooSlow} · 兵力不足 {state.attackDiagnostics.insufficient} · 报价不可用 {state.attackDiagnostics.noQuote}</p>
     </div>}
     {state.planning && <div className="expansion-progress">
       <p>本轮已安排 {state.planning.assigned} / {state.planning.sources} 颗来源 · {state.planning.ready} 颗具备可行方案</p>
