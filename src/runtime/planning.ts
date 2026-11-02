@@ -4,7 +4,10 @@ export function finishPlanning<T>(steps: Generator<void, T>): T {
   return step.value;
 }
 
-const yieldToPage = () => new Promise<void>(resolve => setTimeout(resolve, 0));
+export const yieldToPage = () => {
+  const scheduler = (globalThis as typeof globalThis & { scheduler: { yield(): Promise<void> } }).scheduler;
+  return scheduler.yield();
+};
 
 /** Keep one planner/executor, but let rendering and stop/configuration events run. */
 export async function runPlanning<T>(steps: Generator<void, T>, current: () => boolean, resume = () => {}, yieldTask = yieldToPage, sliceMs = 8): Promise<T | undefined> {

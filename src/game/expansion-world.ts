@@ -45,7 +45,7 @@ export class GameWorld implements ExpansionWorld {
       if (!alive()) throw new Error('扫描已停止。');
     };
     try {
-      if (settings.captureMeteorites && !this.session.conn.db.meteorite) throw new Error('陨石情报接口不可用。');
+      if (settings.captureMeteorites && !this.session.conn.db.meteorite2) throw new Error('陨石情报接口不可用。');
       if (settings.captureSuns && !this.session.conn.db.sun_swarm2) throw new Error('恒星舰队情报接口不可用。');
       await add(`SELECT * FROM planet WHERE owner_key = x'${identity}'`);
       await add(`SELECT * FROM swarm WHERE owner_id = x'${identity}'`);
@@ -70,7 +70,7 @@ export class GameWorld implements ExpansionWorld {
       for (const batch of tileBatches) {
         const where = batch.map(key => tiles.get(key)!).join(' OR ');
         for (const table of ['planet', 'sun2', 'base']) queries.push(`SELECT * FROM ${table} WHERE ${where}`);
-        if (settings.captureMeteorites) queries.push(`SELECT * FROM meteorite WHERE ${where}`);
+        if (settings.captureMeteorites) queries.push(`SELECT * FROM meteorite2 WHERE ${where}`);
         if (settings.captureSuns) queries.push(`SELECT * FROM sun_swarm2 WHERE ${where.replaceAll('position_x', 'target_x').replaceAll('position_y', 'target_y')}`);
         queries.push(`SELECT * FROM swarm WHERE ${where.replaceAll('position_x', 'target_x').replaceAll('position_y', 'target_y')}`);
       }
@@ -146,7 +146,7 @@ export class GameWorld implements ExpansionWorld {
     }
     for (const row of db.sun_swarm2?.iter() ?? []) if (!row.targetBlackHole && row.targetSunId > 0n) addBodyFleet(row.targetSunId, 'sun', row);
     return { planets, owned, allOwned, budgets, incoming, fleets, fleetsByTarget, identity: this.session.identity, allies, intelligence: true,
-      suns: [...db.sun2.iter()], meteorites: [...(db.meteorite?.iter() ?? [])], bodyFleets,
+      suns: [...db.sun2.iter()], meteorites: [...(db.meteorite2?.iter() ?? [])], bodyFleets,
       automated: new Set([...db.attack_automation.iter()].map(a => a.sourcePlanetId).concat([...db.upgrade_automation.iter()].map(a => a.planetId))),
       players: new Map([...(db.player?.iter() ?? [])].map(p => [p.identity.toHexString(), p.username])),
     };

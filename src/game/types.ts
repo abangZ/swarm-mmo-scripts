@@ -22,7 +22,7 @@ export interface Connection {
     player?: Table<{ identity: Identity; username: string }>;
     player_tech?: Table<{ playerId: Identity }>;
     sun2?: Table<Sun>; base?: Table<unknown>;
-    meteorite?: Table<Meteorite>; sun_swarm2?: Table<SunSwarm>;
+    meteorite2?: Table<Meteorite>; sun_swarm2?: Table<SunSwarm>;
     attack_automation?: Table<{ sourcePlanetId: bigint }>;
     upgrade_automation?: Table<{ planetId: bigint }>;
   };

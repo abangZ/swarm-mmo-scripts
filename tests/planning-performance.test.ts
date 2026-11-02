@@ -102,7 +102,7 @@ test('adding attack during a planning yield discards expansion results and reser
   assert.equal(unresolved(), false);
 });
 
-test('quote refresh failure after yielding stops both modes before any transmission', async t => {
+test('quote refresh failure cancels dispatch and leaves expansion available for automatic recovery', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
   let time = 0; t.mock.method(performance, 'now', () => time += 10);
   const f = fakeWorld(); f.world.refreshQuotes = () => { throw new Error('subscription lost'); };
@@ -110,9 +110,10 @@ test('quote refresh failure after yielding stops both modes before any transmiss
   const run = commander.start('expansion', config());
   const attack = config(); attack.policy.zone = { x: 0, y: 0, radius: 10 };
   Object.assign(f.snapshot, { intelligence: true, allies: new Set(['me']) });
-  commander.start('attack', attack); await settle(); t.mock.timers.tick(250); await settle(); t.mock.timers.tick(0); await run;
+  commander.start('attack', attack); await settle(); t.mock.timers.tick(250); await settle(); t.mock.timers.tick(0); await settle();
   assert.equal((f.world.launch as any).mock.callCount(), 0);
-  assert.equal(commander.states.expansion.activity, 'error'); assert.equal(commander.states.attack.activity, 'error');
+  assert.equal(commander.states.expansion.activity, 'paused'); assert.equal(commander.states.attack.running, false);
+  commander.stop(); t.mock.timers.tick(500); await run;
   assert.equal(unresolved(), false);
 });
 

@@ -70,6 +70,33 @@ test('native quote and route are reused within a snapshot but refreshed before t
   assert.throws(() => f.world.read(), /订阅已失效/);
 });
 
+test('default expansion scans the live meteorite2 table without a meteorite alias', async t => {
+  const f = setup(); t.after(() => f.world.dispose());
+  const meteorite = { meteoriteId: 7n, positionX: 3, positionY: 0, galaxyId: 1n, probeCount: 1, expiresAt: { toMillis: () => Date.now() + 3600000 } };
+  assert.equal('meteorite' in f.session.conn.db, false);
+  f.session.conn.db.meteorite2 = { iter: () => [meteorite] };
+  f.onQuery(query => assert.doesNotMatch(query, /FROM meteorite\b/, 'Meteorite is a row type; the live SQL table is meteorite2'));
+  await f.world.scan(defaults, () => true);
+  assert.ok(f.queries.some(query => query.startsWith('SELECT * FROM meteorite2 WHERE')));
+  const snapshot = f.world.read();
+  assert.deepEqual(snapshot.meteorites, [meteorite]);
+  assert.equal(snapshot.owned.length, 1);
+  assert.equal(f.launchSwarm.mock.callCount(), 0);
+});
+
+test('missing meteorite2 data blocks meteorite capture but not scans with that feature disabled', async t => {
+  const f = setup(); t.after(() => f.world.dispose());
+  delete f.session.conn.db.meteorite2;
+  await assert.rejects(f.world.scan(defaults, () => true), /陨石情报接口不可用/);
+  assert.equal(f.queries.length, 0);
+  const settings = { ...defaults, captureMeteorites: 0 };
+  f.world.configure([{ settings, policy: { ...defaultPolicy } }]);
+  await f.world.scan(settings, () => true);
+  assert.ok(f.queries.every(query => !query.includes('meteorite')));
+  assert.equal(f.world.read().owned.length, 1);
+  assert.equal(f.launchSwarm.mock.callCount(), 0);
+});
+
 test('special targets use separate native quotes, target fleet tables and reducers even when numeric ids collide', async t => {
   const f = setup(); t.after(() => f.world.dispose());
   const calls: unknown[] = [];
@@ -81,13 +108,13 @@ test('special targets use separate native quotes, target fleet tables and reduce
   const foe = { toHexString: () => 'enemy' };
   Object.assign(f.session.conn.db, {
     sun2: { iter: () => [{ sunId: 2n, positionX: 2, positionY: 0, galaxyId: 1n, probeCount: 0 }] },
-    meteorite: { iter: () => [{ meteoriteId: 2n, positionX: 3, positionY: 0, galaxyId: 1n, probeCount: 1, expiresAt: { toMillis: () => Date.now() + 3600000 } }] },
+    meteorite2: { iter: () => [{ meteoriteId: 2n, positionX: 3, positionY: 0, galaxyId: 1n, probeCount: 1, expiresAt: { toMillis: () => Date.now() + 3600000 } }] },
     swarm: { iter: () => [{ swarmId: 1n, ownerId: foe, targetPlanetId: 0n, targetSunId: 2n }, { swarmId: 2n, ownerId: foe, targetPlanetId: 0n, targetMeteoriteId: 2n }] },
     sun_swarm2: { iter: () => [{ swarmId: 1n, ownerId: foe, targetSunId: 2n, targetBlackHole: false }] },
   });
   await f.world.scan(defaults, () => true);
   const snapshot = f.world.read();
-  assert.ok(f.queries.some(q => q.startsWith('SELECT * FROM meteorite WHERE')));
+  assert.ok(f.queries.some(q => q.startsWith('SELECT * FROM meteorite2 WHERE')));
   assert.ok(f.queries.some(q => q.startsWith('SELECT * FROM sun_swarm2 WHERE') && q.includes('target_x')));
   assert.equal(snapshot.fleets!.length, 0); assert.equal(snapshot.bodyFleets!.get('sun:2')!.length, 2); assert.equal(snapshot.bodyFleets!.get('comet:2')!.length, 1);
   f.native.mock.mockImplementation(() => ({ travelMs: 2000, lossPct: 0, outOfRange: false, exact: { reason: 'capture', probes: 100 } }));

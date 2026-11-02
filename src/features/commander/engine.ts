@@ -3,8 +3,7 @@ import type { ExpansionWorld, WorldSnapshot } from '../expansion/world';
 import { bodyFleetsFor, bodyFor } from '../expansion/world';
 import { completionMs, jobKey, members, planetLocks, sourceLabel, targetLabel, totalCount, validateSettings, type Assignment } from '../expansion/types';
 import type { ExpansionActivity, ExpansionState } from '../expansion/engine';
-import { expansionProposalSteps } from '../expansion/proposals';
-import { expansionPlanSteps } from '../expansion/planner';
+import { BackgroundPlanner } from '../expansion/background-planner';
 import { runPlanning } from '../../runtime/planning';
 import { attackStartupIssue } from '../attack/diagnostics';
 import { attackQuote } from '../attack/planner';
@@ -43,6 +42,11 @@ export class Commander {
   private attackReservations = new Map<bigint, number>();
   private coveredRevision = -1;
   private scanning = false;
+  private scanTask?: Promise<void>;
+  private planningTask?: Promise<void>;
+  private planningCancel?: AbortController;
+  private planner = new BackgroundPlanner();
+  private planningMs = 0;
   private failure?: Error;
   private reconnectAt: number | null = null;
   private identity?: string;
@@ -70,7 +74,7 @@ export class Commander {
     if (activity) state.activity = activity;
     this.update(mode, { ...state, queue: [...state.queue] });
   }
-  private interruptWaiting() { for (const controller of this.cancellations.values()) controller.abort(); this.wake?.(); }
+  private interruptWaiting() { this.scanPlans.clear(); this.planningCancel?.abort(); for (const controller of this.cancellations.values()) controller.abort(); this.wake?.(); }
   private wait(ms: number) {
     return new Promise<void>(resolve => {
       const finish = () => { clearTimeout(timer); if (this.wake === finish) this.wake = undefined; resolve(); };
@@ -133,6 +137,7 @@ export class Commander {
             try {
               if (this.reconnectAt !== null) {
                 if (Date.now() < this.reconnectAt) { await this.wait(Math.min(1000, this.reconnectAt - Date.now())); continue; }
+                await this.scanTask; await this.planningTask;
                 await Promise.all(this.tasks.values()); await Promise.all(this.expansionObservers); await this.inventoryRecovery;
                 this.world?.dispose(); this.world = undefined; this.reconnectAt = null;
                 if (!this.active) break;
@@ -151,6 +156,7 @@ export class Commander {
           // Keep ownership, subscriptions and inventory barriers alive until both
           // lanes settle, including a second receipt after the first lane fails.
           await Promise.all(this.tasks.values());
+          await this.scanTask; await this.planningTask;
           await Promise.all(this.expansionObservers);
           await this.inventoryRecovery;
         }
@@ -159,6 +165,7 @@ export class Commander {
     finally {
       this.finishStopped();
       this.world?.dispose(); this.world = undefined; this.configs = {}; this.working = false;
+      this.planner.dispose();
       this.reconnectAt = null; this.identity = undefined;
       this.saving = undefined; this.debits.clear(); this.pendingSources.clear(); this.pendingTargets.clear(); this.attackReservations.clear();
       this.expansionStock.clear(); this.expansionPending.clear(); this.inventoryDirty.clear(); this.expansionFleets.clear();
@@ -225,21 +232,15 @@ export class Commander {
       this.emit(active);
     }
   }
-  private async tick() {
-    const world = this.world!;
-    this.retryInventory(world);
-    if (document.visibilityState === 'hidden') this.planned('attack');
-    if (Date.now() >= this.nextScan || world.needsScan?.()) {
+  private async scan(world: ExpansionWorld) {
       const revision = this.revision, configs = this.activeConfigs();
       const settings = { ...configs[0].settings, radius: Math.max(...configs.map(c => c.settings.radius)) };
-      this.interruptWaiting();
       this.nextScan = Infinity; this.scanPlans.clear();
-      for (const mode of modes) if (this.configs[mode]) { this.states[mode].queue = []; this.states[mode].nextScanAt = null; }
-      this.expansionFleets.clear();
+      for (const mode of modes) if (this.configs[mode]) this.states[mode].nextScanAt = null;
       world.configure?.(configs);
-      for (const mode of modes) if (this.configs[mode]) this.emit(mode, '正在扫描战区星球、舰队与科技覆盖…', 'scanning');
+      for (const mode of modes) if (this.configs[mode]) this.emit(mode, '正在扫描内存情报与战区覆盖，已有队列继续执行…', 'scanning');
       this.scanning = true;
-      try { await world.scan(settings, () => this.active); } finally { this.scanning = false; }
+      try { await world.scan(settings, () => this.active && revision === this.revision && this.reconnectAt === null); } finally { this.scanning = false; }
       if (!this.active || revision !== this.revision) return;
       this.coveredRevision = revision;
       const snapshot = world.read();
@@ -266,17 +267,51 @@ export class Commander {
         this.emit(mode, `扫描完成：战区内 ${state.ownedCount} 颗己方星球，开始评估目标`, 'scanning');
       }
       this.nextPlan = { expansion: 0, attack: 0 };
+  }
+  private async tick() {
+    const world = this.world!;
+    this.retryInventory(world);
+    if (document.visibilityState === 'hidden') this.planned('attack');
+    if (!this.scanTask && !this.planningTask && !this.scanPlans.size && (Date.now() >= this.nextScan || world.needsScan?.())) {
+      const revision = this.revision;
+      this.scanTask = this.scan(world).catch(error => { if (this.active && revision === this.revision) this.recover(error); })
+        .finally(() => { this.scanTask = undefined; this.wake?.(); });
+    }
+    // Only initial/configuration coverage gates dispatch. Routine scans run beside
+    // the existing queue and cannot cancel its rate-limit wait or erase its jobs.
+    if (this.coveredRevision !== this.revision) {
+      await this.scanTask;
+      if (this.coveredRevision !== this.revision) return;
     }
     if (!this.active) return;
     // Attack reserves its concrete planned amounts before expansion reads the
     // common budget. Neither lane waits for the other lane's cooldown or receipt.
     for (const mode of ['attack', 'expansion'] as const) {
       const config = this.configs[mode];
-      if (!config || mode === 'attack' && document.visibilityState === 'hidden' || this.tasks.has(mode) || Date.now() < this.nextPlan[mode]) continue;
+      if (!config || mode === 'attack' && (document.visibilityState === 'hidden' || this.tasks.has(mode) || Date.now() < this.nextPlan[mode])) continue;
+      if (mode === 'expansion') {
+        if (!this.scanTask && !this.planningTask && Date.now() >= this.nextPlan.expansion && (this.scanPlans.has(mode)
+          || this.states.expansion.queue.length <= Math.max(3, Math.ceil(this.planningMs / config.settings.intervalMs) + 3))) {
+          const controller = new AbortController(); this.planningCancel = controller;
+          this.planningTask = this.runLane(mode, config, controller.signal).catch(error => this.recover(error)).finally(() => {
+            this.planningTask = undefined; this.planningCancel = undefined; this.wake?.();
+          });
+        }
+        const job = this.states.expansion.queue[0];
+        if (!job || this.tasks.has(mode)) continue;
+        const controller = new AbortController(), revision = this.revision;
+        this.cancellations.set(mode, controller);
+        const current = () => !controller.signal.aborted && this.configs.expansion === config && revision === this.revision && !this.failure && this.reconnectAt === null;
+        const task = this.executeJob(mode, config, controller.signal, current, job).catch(error => this.recover(error)).finally(() => {
+          this.tasks.delete(mode); this.cancellations.delete(mode); this.wake?.();
+        });
+        this.tasks.set(mode, task);
+        continue;
+      }
       const controller = new AbortController(); this.cancellations.set(mode, controller);
-      const task = this.runLane(mode, config, controller.signal).catch(error => mode === 'expansion' ? this.recover(error) : this.fail(error)).finally(() => {
+      const task = this.runLane(mode, config, controller.signal).catch(error => this.fail(error)).finally(() => {
         this.tasks.delete(mode); this.cancellations.delete(mode); this.finishStopped();
-        if (!this.active || !this.configs[mode] || mode === 'expansion' && this.states.expansion.queue.length) this.wake?.();
+        if (!this.active || !this.configs[mode]) this.wake?.();
       });
       this.tasks.set(mode, task);
     }
@@ -284,13 +319,12 @@ export class Commander {
   private async runLane(mode: Mode, config: ModeConfig, signal: AbortSignal) {
     const world = this.world!, planningRevision = this.revision, inventoryRevision = this.inventoryRevision;
     const current = () => !signal.aborted && this.configs[mode] === config && !this.failure && this.reconnectAt === null && planningRevision === this.revision && (mode === 'expansion' || document.visibilityState !== 'hidden');
-    if (mode === 'expansion' && this.states.expansion.queue.length) {
-      await this.executeJob(mode, config, signal, current, this.states.expansion.queue[0]);
-      return;
-    }
+    const planningStarted = performance.now();
     const snapshot = world.read(), configs = this.activeConfigs();
     const budgets = this.budgets(snapshot);
     const bodyLocked = new Set([...this.flights.keys(), ...this.pendingTargets]);
+    const retained = mode === 'expansion' ? [...this.states.expansion.queue] : [];
+    for (const job of retained) bodyLocked.add(jobKey(job));
     const locked = planetLocks(bodyLocked);
     const interval = config.settings.intervalMs;
     let attack: Assignment | undefined;
@@ -327,44 +361,86 @@ export class Commander {
     const expansionConfig = mode === 'expansion' ? config : undefined;
     let expansion: Assignment | undefined;
     if (expansionConfig) {
-      // Ordinary expansion retains its fast queued plans and checks live budgets
-      // at dispatch. Only a draft publishing shared sun reservations needs an
-      // unchanged inventory version; unrelated attack receipts must not starve it.
-      let publishesReservations = this.sunReservations.size > 0;
-      const planningCurrent = () => current() && (!publishesReservations || inventoryRevision === this.inventoryRevision);
+      // Dispatch can advance while this draft computes. Validate concrete jobs
+      // against live budgets at publication instead of requiring global stillness.
+      const planningCurrent = current;
       const left = new Map(budgets);
       for (const [id, count] of this.attackReservations) left.set(id, Math.max(0, (left.get(id) ?? 0) - count));
+      for (const job of retained) for (const m of members(job)) left.set(m.sourceId, Math.max(0, (left.get(m.sourceId) ?? 0) - m.count));
       const sunDraft = this.sunPlanner.fork();
-      const sun = await runPlanning(sunDraft.steps(world, snapshot, config, left, bodyLocked, hub => Math.max(0,
+      const retainedSun = retained.some(job => job.kind === 'sun-supply' || job.targetKind === 'sun');
+      const sun = retainedSun ? { reservations: new Map(this.sunReservations), job: undefined, sun: undefined, hub: undefined, waiting: undefined }
+        : await runPlanning(sunDraft.steps(world, snapshot, config, left, bodyLocked, hub => Math.max(0,
         ...configs.filter(c => inZone(hub, c.policy.zone) && snapshot.planets.some(p => hostile(p, snapshot) && distance(p, hub) <= c.policy.threatRadius)).map(c => c.policy.frontlinePercent))), planningCurrent, () => world.refreshQuotes?.());
-      publishesReservations ||= !!sun?.reservations.size;
       if (!sun || !planningCurrent()) return;
       for (const [id, count] of sun.reservations) left.set(id, Math.max(0, (left.get(id) ?? 0) - count));
-      const proposals = await runPlanning(expansionProposalSteps(world, snapshot, expansionConfig, left, locked), planningCurrent, () => world.refreshQuotes?.());
+      const proposals = await this.planner.proposals(world, snapshot, expansionConfig, left, locked, signal, planningCurrent);
       if (!proposals || !planningCurrent()) return;
       const meteorites = await runPlanning(meteoriteProposals(world, snapshot, config, left, bodyLocked), planningCurrent, () => world.refreshQuotes?.());
       if (!meteorites || !planningCurrent()) return;
-      const plan = await runPlanning(expansionPlanSteps([...proposals.edges, ...meteorites], left, interval,
-        Math.max(0, expansionConfig.settings.horizonMs - (sun.job ? interval : 0)), expansionConfig.settings.maxTravelMs, sun.job ? interval : 0), planningCurrent);
+      const delay = (retained.length + (sun.job ? 1 : 0)) * interval;
+      const plan = await this.planner.plan(world, [...proposals.edges, ...meteorites], left, interval,
+        Math.max(0, expansionConfig.settings.horizonMs - delay), expansionConfig.settings.maxTravelMs, delay, signal, planningCurrent);
       if (!plan || !planningCurrent()) return;
-      const captures = [...(sun.job ? [sun.job] : []), ...plan.jobs];
+      // A retained sun job can launch while we compute: preserve its live campaign.
+      // Otherwise this is the only producer of sun work, so ordinary sends cannot
+      // invalidate the draft's campaign state.
+      const publishSun = !retainedSun;
+      const captures = [...(publishSun && sun.job ? [sun.job] : []), ...plan.jobs];
       const protectedSources = new Set([...this.attackReservations.keys(), ...sun.reservations.keys(), ...captures.flatMap(job => members(job).map(m => m.sourceId))]);
       let maintenance = world.upgrade ? await runPlanning(this.upgrades.steps(snapshot, config, left, protectedSources), planningCurrent) : [];
       if (!maintenance || !planningCurrent()) return;
       if (inventoryRevision !== this.inventoryRevision) maintenance = [];
-      this.sunPlanner = sunDraft;
-      if (sun.reservations.size !== this.sunReservations.size || [...sun.reservations].some(([id, n]) => n !== this.sunReservations.get(id))) this.inventoryRevision++;
-      this.sunReservations = sun.reservations;
-      const jobs = [...captures, ...maintenance].slice(0, Math.floor(config.settings.horizonMs / interval) + 1);
+      const fresh = world.read(), available = this.budgets(fresh), seen = new Set([...this.flights.keys(), ...this.pendingTargets]);
+      for (const [id, n] of this.attackReservations) available.set(id, Math.max(0, (available.get(id) ?? 0) - n));
+      const candidates = [...this.states.expansion.queue, ...captures, ...maintenance];
+      const isSun = (job: Assignment) => job.kind === 'sun-supply' || job.targetKind === 'sun';
+      const hasSunJob = candidates.some(isSun);
+      const proposedReservations = publishSun ? sun.reservations : this.sunReservations;
+      const nextSunPlanner = publishSun ? sunDraft : this.sunPlanner;
+      const reservations = new Map<bigint, number>();
+      const reserveWaiting = () => {
+        for (const [id, count] of proposedReservations) {
+          const held = Math.min(count, available.get(id) ?? 0);
+          if (held > 0) { reservations.set(id, held); available.set(id, available.get(id)! - held); }
+        }
+      };
+      // An already launched supply campaign keeps only its funded hub reserve.
+      if (!hasSunJob && nextSunPlanner.gathering) reserveWaiting();
+      const jobs: Assignment[] = [], signatures = new Map<string, string>();
+      for (const job of candidates) {
+        const key = jobKey(job), signature = this.states.expansion.queue.includes(job) ? this.expansionFleets.get(key) : fleetState(snapshot, job);
+        const target = bodyFor(fresh, job.targetId, job.targetKind);
+        if (seen.has(key) || !target || signature !== fleetState(fresh, job) || (!job.kind && target.ownerId != null)) continue;
+        if (job.kind === 'sun-supply' && !nextSunPlanner.validSupply(job, fresh, config)) continue;
+        if (job.targetKind === 'sun' && !validSpecialTarget(job, fresh, config)) continue;
+        const required = new Map(members(job).map(m => [m.sourceId, m.count]));
+        if (job.kind === 'sun-supply') required.set(job.targetId, job.hubBudget ?? 0);
+        if ([...required].some(([id, count]) => count > (available.get(id) ?? 0))) continue;
+        jobs.push(job); seen.add(key); signatures.set(key, signature!);
+        for (const [id, count] of required) {
+          available.set(id, (available.get(id) ?? 0) - count);
+          if (isSun(job)) reservations.set(id, count);
+        }
+        if (jobs.length >= Math.floor(config.settings.horizonMs / interval) + 1) break;
+      }
+      if (hasSunJob && !jobs.some(isSun) && nextSunPlanner.gathering) reserveWaiting();
+      // Commit the selected jobs and their reserves together, without an await.
+      // A rejected new sun cannot reserve stock or evict a valid retained job.
+      this.sunPlanner = nextSunPlanner;
+      if (reservations.size !== this.sunReservations.size || [...reservations].some(([id, n]) => n !== this.sunReservations.get(id))) this.inventoryRevision++;
+      this.sunReservations = reservations;
       const assigned = new Set(plan.jobs.flatMap(job => members(job).map(m => m.sourceId)));
       for (const job of jobs) for (const member of members(job)) assigned.add(member.sourceId);
       const idle = proposals.sources.filter(source => !assigned.has(source.sourceId)).sort((a, b) => b.available - a.available).slice(0, 6);
       this.states.expansion.planning = { sources: proposals.sources.length, ready: proposals.readySources, assigned: assigned.size, idle };
-      this.states.expansion.queue = jobs; this.states.expansion.exact = plan.exact && !sun.job && !maintenance.length; this.states.expansion.candidateCount = proposals.candidates + new Set(meteorites.map(job => job.targetId)).size + (sun.sun ? 1 : 0);
+      this.states.expansion.queue = jobs; this.states.expansion.exact = plan.exact && !retained.length && !sun.job && !maintenance.length; this.states.expansion.candidateCount = proposals.candidates + new Set(meteorites.map(job => job.targetId)).size + (sun.sun ? 1 : 0);
       this.states.expansion.decisions = jobs.slice(0, 5).map(decisionLabel);
       this.states.expansion.exposed = proposals.exposed;
-      this.states.expansion.sun = sun.sun !== undefined ? { target: sun.sun, hub: sun.hub, waiting: sun.waiting } : undefined;
-      this.expansionFleets = new Map(jobs.map(job => [jobKey(job), fleetState(snapshot, job)]));
+      if (publishSun) this.states.expansion.sun = sun.sun !== undefined && (!sun.job || jobs.includes(sun.job)) ? { target: sun.sun, hub: sun.hub, waiting: sun.waiting } : undefined;
+      this.expansionFleets = signatures;
+      this.planningMs = performance.now() - planningStarted;
+      if (jobs.length || this.scanPlans.has('expansion')) this.emit('expansion', `后台评估完成：${(this.planningMs / 1000).toFixed(1)} 秒，待执行 ${jobs.length} 项；队列已合并`, jobs.length ? 'queued' : 'waiting');
       expansion = jobs[0];
       if (!expansion) this.emit('expansion', sun.waiting ?? `暂无可执行扩张：${proposals.readySources}/${proposals.sources.length} 颗来源可出兵；${idle[0]?.reason ?? '战区内暂无己方来源'}`, 'waiting');
     }
@@ -373,7 +449,7 @@ export class Commander {
     this.states[mode].flights = this.flightCount(mode); this.emit(mode);
     this.nextPlan[mode] = Date.now() + (inventoryRevision === this.inventoryRevision ? 1000 : 0);
     const job = mode === 'attack' ? attack : expansion;
-    if (!job) return;
+    if (!job || mode === 'expansion') return;
     await this.executeJob(mode, config, signal, current, job);
   }
   private async executeJob(mode: Mode, config: ModeConfig, signal: AbortSignal, current: () => boolean, job: Assignment) {
@@ -386,7 +462,7 @@ export class Commander {
       try {
         await dispatchExpansion(() => {
           const fresh = world.read();
-          if (!current() || this.scanning || this.coveredRevision !== dispatchRevision || this.flights.has(jobKey(job)) || this.pendingTargets.has(jobKey(job))) return null;
+          if (!current() || !this.states.expansion.queue.includes(job) || this.coveredRevision !== dispatchRevision || this.flights.has(jobKey(job)) || this.pendingTargets.has(jobKey(job))) return null;
           const target = bodyFor(fresh, job.targetId, job.targetKind);
           if (!target || !inZone(target, config.policy.zone) || this.expansionFleets.get(jobKey(job)) !== fleetState(fresh, job)) return null;
           if (job.kind === 'sun-supply') { if (!this.sunPlanner.validSupply(job, fresh, config)) return null; }
@@ -434,8 +510,8 @@ export class Commander {
         }, this.expansionDelay, current, signal);
       } finally {
         this.states.expansion.queue = this.states.expansion.queue.filter(queued => queued !== job);
-        if (!submitted && (job.kind === 'sun-supply' || job.targetKind === 'sun')) this.sunReservations.clear();
-        this.nextPlan.expansion = 0;
+        if (!submitted && (job.kind === 'sun-supply' || job.targetKind === 'sun')
+          && !this.states.expansion.queue.some(next => next.kind === 'sun-supply' || next.targetKind === 'sun')) this.sunReservations.clear();
       }
       return;
     }

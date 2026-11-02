@@ -141,9 +141,15 @@ CPU 采样定位到逐来源重复排序、附近机会计算和大规模方案�
 本轮读取 `/play` 当前公开前端 `/assets/index-2daj5LmU.js`，并核对官方 [Suns](https://www.swarm-mmo.com/wiki/suns)、[Meteorites](https://www.swarm-mmo.com/wiki/meteorites)、[Automation](https://www.swarm-mmo.com/wiki/automation)。没有进入真实账号执行发射或升级。
 
 - 当前恒星表 `sun2` 的字段为 sunId、ownerId、probeCount、positionX/Y、galaxyId，其中 probeCount 表示超级信标。`quoteSend('planet', sourceId, 'sun', targetId)` 返回的 exact.probes 仍是来源要发送的普通探针数量；原生单星接口为 `launchSwarmAtSun({sourcePlanetId, targetSunId, probeCount})`，批量路由 kind = 1。
-- 陨石已经是独立 `meteorite` 表，包含 meteoriteId、ownerId、probeCount、positionX/Y、galaxyId、expiresAt（timestamp.toMillis）；不是普通 planet 行。前端目标类型名为 comet，单星接口为 `launchSwarmAtMeteorite({sourcePlanetId, targetMeteoriteId, probeCount})`，原生批量路由 kind = 5。本版陨石使用单来源。
+- 陨石已经是独立 `meteorite2` 表，包含 meteoriteId、ownerId、probeCount、positionX/Y、galaxyId、expiresAt（timestamp.toMillis）；不是普通 planet 行。前端目标类型名为 comet，单星接口为 `launchSwarmAtMeteorite({sourcePlanetId, targetMeteoriteId, probeCount})`，原生批量路由 kind = 5。本版陨石使用单来源。（表名于 2026-11-03 更正：此前误将行类型 Meteorite 当成表名。）
 - 普通 swarm 表同时包含 targetSunId / targetMeteoriteId；恒星还可能收到 sun_swarm2（targetSunId、targetBlackHole）舰队，不能只查普通行星来袭。原生 ID 各表独立，助手以类型和 ID 组合做锁定、分配与缓存。
 - 每支行星到恒星舰队分别执行边境损耗与整数转换，不能把两个 60 普通探针的小包当作 1 个超级信标。脚本先把碎片兵力汇到己方行星，再以实际库存出击；募集合计使用未享受 Conversion 优惠的保守预算，最终发射使用原生报价。
 - 公开 schema 注册 `upgrade_planet`，参数为 planetId；另有 `set_upgrade_automation_bulk({planetIds, enable})`。本版选择稳定后方单级升级，避免持续原生自动化抢占之后的扩张预算。升级以未折扣成本作为上界，回本按最低基础生产计算。
 
 测试采用模拟 World、模拟 SpacetimeDB 和 React/JSDOM，覆盖目标 ID 冲突、不同发射路由、恒星不足转换单位时先汇集、跨境双段损耗、重叠守军预算、陨石到期、旧设置迁移和稳定升级。新表订阅和原生 reducer 依据公开前端核对，尚未进行真实游戏服务器操作验收。
+
+### 陨石扫描修正（v0.13.1，2026-11-03）
+
+用户实测 v0.13.0 在首次扫描反复报「陨石情报接口不可用」。复查原先下载的 `/assets/index-2daj5LmU.js` 及当前 `/assets/index-C97C76VC.js`，两者的表注册均为 `meteorite2`，实际读取为 `conn.db.meteorite2.iter()`，原生订阅使用 `SELECT * FROM meteorite2`。此前只核对了 Meteorite 行类型，代码、模拟连接与文档一起误用了 `meteorite`；不是游戏临时断线。
+
+修正接口检查、区域订阅、快照读取和测试夹具。增加仅提供 meteorite2 的真实表名形状回归，以及缺失表时仅在开启陨石功能才阻止扫描的测试。修复前已复现截图错误，修复后类型检查与 181 项测试通过；未在真实账号中发射或升级。

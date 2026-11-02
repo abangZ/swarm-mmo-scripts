@@ -1,6 +1,6 @@
 # 架构与开发约定
 
-当前 v0.13.0，React 19、TypeScript、esbuild、pnpm。发布物为包含 React、React DOM、业务代码与 Shadow DOM 样式的单个 IIFE 油猴脚本。
+当前 v0.14.0，React 19、TypeScript、esbuild、pnpm。发布物为包含 React、React DOM、业务代码与 Shadow DOM 样式的单个 IIFE 油猴脚本。
 
 ## 职责划分
 
@@ -23,6 +23,7 @@
 | `features/expansion/proposals.ts` | 混合候选、在途缺口、无主星单星/合兵提案与执行复核 |
 | `features/expansion/special-targets.ts` | 无主恒星报价与附近碎片汇集、陨石期限候选 |
 | `features/expansion/strategy.ts` | 地理风险准入、稳定后方逐级升级、会话占领与保有记录 |
+| `features/expansion/background-planner.ts` / `planner-work.ts` / `planner.worker.ts` | 内嵌 Dedicated Worker、纯数据快照与原生内存报价消息通道 |
 | `features/expansion/planner.ts` / `cooperation.ts` | 有界分配、截止时间、多来源损耗与库存约束 |
 | `features/expansion/engine.ts` | 旧单模式入口的兼容 facade，委托同一个 Commander 实现，无第二套调度 |
 | `runtime/operations.ts` / `planning.ts` | 跨标签页 Web Lock、操作间隔、未知结果锁定、可取消的计算分片 |
@@ -40,13 +41,25 @@
 
 跨标签页 Web Lock 仍覆盖整个 Commander 会话，不由两个模式分别抢锁。扩张使用 `dispatchExpansion`，基准间隔加均匀 ±200ms 随机量，最短 1000ms；同一个发送时隙只抽样一次，失效队列项跳过时沿用该时隙，不重复抽样。进攻继续使用 `dispatch`，固定每秒最多一次。两个执行器共用按模式隔离的执行状态和 localStorage 时间戳，以实际调用原生接口的时间为基准，不补发错过的操作。扩张不创建未知结果标记，也不等原生 Promise；进攻仍保存 token 并等待确认。
 
-覆盖扫描开始时取消未发射的旧任务、清空旧队列，暂停下一次周期计时；成功后用 `scanPlans` 记录本轮仍待完成规划的活动模式。每个模式完整发布规划结果后移除标记，最后一个完成时设置 `nextScan = Date.now() + min(scanMs)` 并发布 nextScanAt。该节点位于 dispatch 之前，不等待发射回执、库存同步或整条操作队列耗尽。规划超过扫描间隔时也不重复触发周期扫描。`needsScan` 发现新增来源仍可提前补覆盖。
+覆盖扫描由独立 scanTask 执行；周期扫描保留扩张队列及正在等待限速的任务，只暂停下一次周期计时；成功后用 `scanPlans` 记录本轮仍待完成规划的活动模式。每个模式完整发布规划结果后移除标记，最后一个完成时设置 `nextScan = Date.now() + min(scanMs)` 并发布 nextScanAt。该节点位于 dispatch 之前，不等待发射回执、库存同步或整条操作队列耗尽。规划超过扫描间隔时也不重复触发周期扫描。`needsScan` 发现新增来源仍可提前补覆盖。
 
-增加/停止模式会递增配置 revision，使正在分片计算或等待限速的旧方案失效，并在新的联合扫描完成后恢复调度。执行闭包再次读取真实库存、敌我关系、目标与在途状态。扩张只对本次任务的来源计算共享防守预算，扣除最新进攻预留，检查目标仍无主且在途摘要未变化，然后按原计划直接发射；不查询原生报价、航线或重做合兵分配。失效项跳过后可继续使用同一个发射时隙。覆盖扫描进行中或 coveredRevision 未追上配置 revision 时不允许发射。任何来源丢失或库存不足均取消该未发射任务。inventoryRevision 记录并行发射和同步；扩张算出空计划时，若期间库存版本变化则立即重新评估，避免对已经释放的来源再空等一秒。
+增加/停止模式会递增配置 revision，使正在分片计算或等待限速的旧方案失效，并在新的联合扫描完成后恢复调度。执行闭包再次读取真实库存、敌我关系、目标与在途状态。扩张只对本次任务的来源计算共享防守预算，扣除最新进攻预留，检查目标仍无主且在途摘要未变化，然后按原计划直接发射；不查询原生报价、航线或重做合兵分配。失效项跳过后可继续使用同一个发射时隙。扩张只在 coveredRevision 未追上配置 revision 时等待新覆盖；普通周期扫描不阻塞已有扩张队列。进攻仍在扫描期间暂停其实际发射。任何来源丢失或库存不足均取消该未发射任务。inventoryRevision 记录并行发射和同步；扩张算出空计划时，若期间库存版本变化则立即重新评估，避免对已经释放的来源再空等一秒。
 
 进攻在 `OffensivePlanner.fork()` 副本上经 `runPlanning` 执行直攻和各据点的生成器。分片恢复同时校验配置 / 库存版本、运行状态与订阅；只有完整且仍有效的结果才替换主规划器和预留。并行发射、同步、占领确认和预留变化都会使库存版本变化，过期草案不能覆盖新据点状态。进攻首次成功扫描调用 `attackStartupIssue`，无来源 / 全部原生自动化时删除进攻配置并发布明确错误，下一轮重新确认扩张覆盖，不全局 fail。
 
 停止一个模式保持另一个模式运行；已提交请求的账本与目标锁继续属于协调器，不能因停止某个 Tab 清除。全部停止后取消未发射任务，等待出队任务、扩张后台观察和正在进行的库存恢复完成有限清理，再释放操作锁和世界订阅；扩张观察分别用 within 限制回执 15 秒、同步 12 秒。迟到的 Promise 成功 / 拒绝已有处理器，但不再次修改已结束观察的状态，不自动重启。
+
+## 扩张后台计算
+
+扩张拥有独立 planningTask 与 Worker，不占用出队任务。周期扫描完成或队列剩余长度接近 `max(3, ceil(上轮评估耗时 / interval) + 3)` 时开始补充；首次启动没有旧队列，仍需等待首轮结果。规划快照先锁定已有队列目标并扣除其数量预算，因此新候选只使用剩余资源。发布前读取最新内存库存，合并仍未发出的旧项和新项，过滤已发目标、舰队摘要变化与预算不足的项；不重复扣除已经同步到缓存的发射。配置变化、停止和恢复会取消计算并终止 Worker；收尾等待扫描、规划与已发任务后释放世界适配器。
+
+`planningSnapshot` 显式抽取星球数值和 owner 字符串，保留 bigint / Map / Set，通过 structured clone 传入 Worker；连接、React Fiber、原生对象方法不跨线程。Worker 负责行星空间筛选、候选排序、合兵与最终任务分配。生成器遇到原生报价依赖时，每次发最多 8 个目标 ID 给页面；页面刷新本片段报价缓存并调用已有地图对象的 quoteSend，时间片约 8ms，使用 scheduler.yield 让出页面，再返回纯数值结果。不调用额外网络接口。恒星 / 陨石与升级仍按已有分片执行，其结果与行星提案一起由 Worker 分配。
+
+只保留一个 Worker、一个串行请求流和一个取消信号，不做 Worker 池、Service Worker 或兼容回退。`scripts/worker.mjs` 在构建时打包 Worker 并内嵌源码，运行时从 Blob 创建，立即回收 URL；开发 watch 跟踪 Worker 的依赖，产物仍是单个 JS。Worker 异常走已有扩张恢复流程。
+
+设计依据：[Web Workers](https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Using_web_workers) 适合独立线程计算，但不能访问页面 DOM；[off-main-thread](https://web.dev/articles/off-main-thread) 将主线程保留给交互和必要页面操作；[scheduler.yield](https://developer.mozilla.org/en-US/docs/Web/API/Scheduler/yield) 用于必须留在页面的分片计算。[Service Worker](https://developer.mozilla.org/en-US/docs/Web/API/Service_Worker_API) 主要处理请求、缓存和事件生命周期，不承担此处持续的规划任务。
+
+验证：Node 假时钟覆盖慢扫描期间连续发射、慢 Worker 结果与实时库存合并、停止取消和旧结果丢弃，并覆盖慢规划期间恒星仍可发布及发射、库存 / 归属 / 驻军变化后的恒星预留释放；真实 worker_threads 使用 1,311 来源 / 566 目标，与同步算法逐项比较提案和分配，并确认原生报价调用数量不增加。Chrome 本地模拟使用相同数据规模、真实 Blob Worker 与 1.2 秒 ±200ms 限速，19 秒内发射 16 次，间隔 1.01–1.37 秒；人为等待 5 秒的周期扫描期间继续发射 5 次，无重复目标、无超过 50ms 的页面长任务，两轮评估分别约 0.4 / 0.3 秒。报价和库存均为模拟内存数据，这些数字不代表真实游戏接口耗时；未在真实账号派兵。
 
 ## 情报与策略边界
 
@@ -70,11 +83,11 @@ unresolved 忽略旧 expansion 和旧版单 token，withControl 在独占 Web Lo
 
 ## 扩张策略、特殊目标与升级
 
-`Assignment.targetKind` 缺省为 planet，另外支持 sun / comet。原生 ID 始终是 bigint；全局在途锁、队列分组、报价缓存和 React key 使用 `kind:id`，避免不同表相同数字 ID 冲突。旧进攻规划器通过 planetLocks 只取得行星锁。GameWorld 增加 sun2 / meteorite 类型和 bodyFleets 索引；恒星来袭同时检查 swarm.targetSunId 和 sun_swarm2，陨石检查 swarm.targetMeteoriteId。按设置增补区域 meteorite / sun_swarm2 订阅并沿用稳定分组与清理。仅开进攻时不加载这些额外表。
+`Assignment.targetKind` 缺省为 planet，另外支持 sun / comet。原生 ID 始终是 bigint；全局在途锁、队列分组、报价缓存和 React key 使用 `kind:id`，避免不同表相同数字 ID 冲突。旧进攻规划器通过 planetLocks 只取得行星锁。GameWorld 读取 sun2 / meteorite2 表并建立 bodyFleets 索引；恒星来袭同时检查 swarm.targetSunId 和 sun_swarm2，陨石检查 swarm.targetMeteoriteId。按设置增补区域 meteorite2 / sun_swarm2 订阅并沿用稳定分组与清理。Meteorite 是行类型名，连接属性与 SQL 表名均为 meteorite2，不能从行类型推导表名。仅开进攻时不加载这些额外表。
 
 每轮扩张先在 SunPlanner 副本中选择最多一颗可承担的无主恒星。单来源优先，使用原生 quoteSend 的 sun 报价；它已经包含赢得恒星所需超级信标对应的发射探针数，不套用行星的原始探针 +1 余量。无法单星承担时，比较最多 16 条汇集路线，8 格内来源按航时和库存募集至己方行星，计入每段损耗和重叠模式对新增库存的前线留兵比例。当前总预算不足时不发补给、不建立攒兵预留。供给以 `kind = sun-supply` 标识，不计占领；发射后只保留据点所需库存预留，等待真实库存满足最新恒星报价。等待最长为补给航时加 30 秒；期间无重复募集，失效后释放。出队核查据点预算未下降、自动化、敌情、目标驻军和归属，不再重算报价。补给和恒星发射均使用扩张限速与后台回执，停止不撤回已发舰队。
 
-恒星的具体数量预留从普通扩张预算扣除，也在进攻规划和出队时复核。含恒星共享预留的草案在配置或库存版本变化时丢弃，完整完成后才发布恒星状态、预留与队列；普通扩张保留快速队列、出队复核预算的机制，升级草案遇库存变化则丢弃。普通行星和陨石共用占点优先分配器，陨石原生目标类型为 comet，但服务器表和接口称 meteorite；不将陨石伪装为行星或生产来源。分配器按实际队列位置加恒星占用的前置时隙检验 expiresAt，出队再次要求航时加 5 秒早于到期。新增生成器保留来源、报价、募集和升级计算分片点。
+恒星的具体数量预留从普通扩张预算扣除，也在进攻规划和出队时复核。恒星草案不因普通发射或回执改变全局库存版本而失效；发布时按最新内存库存、进攻预留和仍可执行的旧队列检查其具体来源、目标及汇集据点预算。只有成功入队的恒星任务才建立对应预留，任务与预留在同一个同步步骤发布；失败任务不留下预留、不清空仍有效的旧队列。已有补给活动等待期间只保留当前预算能覆盖的据点预留，计算期间旧恒星任务已发出时沿用实时活动状态；普通扩张保留快速队列、出队复核预算的机制，升级草案遇库存变化则丢弃。普通行星和陨石共用占点优先分配器，陨石原生目标类型为 comet，服务器表为 meteorite2，派兵接口为 launchSwarmAtMeteorite；不将陨石伪装为行星或生产来源。分配器按实际队列位置加恒星占用的前置时隙检验 expiresAt，出队再次要求航时加 5 秒早于到期。新增生成器保留来源、报价、募集和升级计算分片点。
 
 普通行星收益使用独立 economicHorizonMs（默认 3 小时），不再使用派兵窗口。cautiousExpansion 默认 0，保持快速占点；开启后仅基于已观测敌我地理关系排除孤立暴露目标，不声称估计敌方 ETA、反击概率或全局战略最优。两种取向均保持动态防守预算。
 

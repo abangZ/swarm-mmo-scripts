@@ -34,10 +34,18 @@ export function expansionQuote(world: ExpansionWorld, snapshot: WorldSnapshot, s
 }
 export interface SourceReport { sourceId: bigint; x: number; y: number; available: number; reason: string }
 export interface ExpansionProposals { edges: Assignment[]; candidates: number; sources: SourceReport[]; readySources: number; exposed?: number }
+export interface QuoteRequest { source: bigint; targets: bigint[] }
 export function expansionProposals(world: ExpansionWorld, snapshot: WorldSnapshot, config: ModeConfig, budgets: Map<bigint, number>, locked: Set<bigint>): ExpansionProposals {
   return finishPlanning(expansionProposalSteps(world, snapshot, config, budgets, locked));
 }
 export function* expansionProposalSteps(world: ExpansionWorld, snapshot: WorldSnapshot, config: ModeConfig, budgets: Map<bigint, number>, locked: Set<bigint>): Generator<void, ExpansionProposals> {
+  const steps = expansionProposalWork(world, snapshot, config, budgets, locked);
+  try {
+    while (true) { const step = steps.next(); if (step.done) return step.value; yield; }
+  } finally { steps.return(undefined as never); }
+}
+/** Quote requests are fulfilled locally, or bridged to the page by a dedicated worker. */
+export function* expansionProposalWork(world: ExpansionWorld, snapshot: WorldSnapshot, config: ModeConfig, budgets: Map<bigint, number>, locked: Set<bigint>): Generator<void | QuoteRequest, ExpansionProposals> {
   const { settings } = config;
   const neutrals = snapshot.planets.filter(p => p.ownerId == null && inZone(p, config.policy.zone));
   const risk = riskEvaluator(snapshot, config);
@@ -103,7 +111,15 @@ export function* expansionProposalSteps(world: ExpansionWorld, snapshot: WorldSn
     }
     const evaluated: { target: Planet; quote: Assignment | null; route: ReturnType<NonNullable<ExpansionWorld['route']>> | undefined }[] = [];
     let affordable = 0;
-    for (const target of pool.values()) {
+    const candidates = [...pool.values()];
+    let quotedUntil = 0;
+    for (const [i, target] of candidates.entries()) {
+      if (i === quotedUntil) {
+        // Never prefetch beyond the earliest possible stopping point: moving the
+        // planner to a worker must not increase native quote work.
+        quotedUntil = i + Math.min(8, Math.max(settings.candidates * 2 - i, settings.candidates - affordable, 1));
+        yield { source: source.planetId, targets: candidates.slice(i, quotedUntil).map(p => p.planetId) };
+      }
       const quote = expansionQuote(world, snapshot, source, target, config);
       evaluated.push({ target, quote, route: world.route?.(source.planetId, target.planetId) });
       if (quote && quote.count <= available) affordable++;

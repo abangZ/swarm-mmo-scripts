@@ -1,5 +1,24 @@
 import { afterEach, beforeEach, mock } from 'node:test';
 import { JSDOM } from 'jsdom';
+import { planningWorker, type PlanningRequest, type PlanningResponse } from '../../src/features/expansion/planner-work';
+
+// Deterministic message transport for fake-clock tests. The real worker bundle is
+// also exercised in a worker_threads integration test; no game network is used.
+class TestWorker {
+  onmessage: ((event: { data: PlanningResponse }) => void) | null = null;
+  onerror: ((event: { message: string }) => void) | null = null;
+  private stopped = false;
+  private receive = planningWorker(message => {
+    const data = structuredClone(message);
+    queueMicrotask(() => { if (!this.stopped) this.onmessage?.({ data }); });
+  });
+  postMessage(message: PlanningRequest) {
+    const data = structuredClone(message);
+    queueMicrotask(() => { if (!this.stopped) this.receive(data); });
+  }
+  terminate() { this.stopped = true; }
+}
+Object.assign(globalThis, { Worker: TestWorker, scheduler: { yield: () => new Promise<void>(resolve => setTimeout(resolve, 0)) } });
 
 const dom = new JSDOM('<body></body>', { url: 'https://www.swarm-mmo.com/play' });
 Object.assign(globalThis, { window: dom.window, document: dom.window.document, Option: dom.window.Option, localStorage: dom.window.localStorage });
