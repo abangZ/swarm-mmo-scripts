@@ -68,10 +68,14 @@ test('rapid menu changes cancel pending handles and late callbacks cannot publis
   const f = setup(); let menu: PlanetMenu | null = f.menu;
   const controller = new PlanetInspector(() => menu); onCleanup(() => controller.dispose());
   controller.refresh();
+  assert.equal(f.subscriptions.length, 0);
+  controller.load(f.menu);
   menu = { ...f.menu, planetId: 2n }; controller.refresh();
   assert.ok(f.subscriptions.slice(0, 2).every(s => s.unsubscribe.mock.callCount() === 1));
   f.subscriptions[0].apply(); f.subscriptions[1].error();
-  assert.equal(controller.getSnapshot()!.incoming.status, 'loading');
+  assert.equal(controller.getSnapshot()!.incoming.status, 'idle');
+  assert.equal(f.subscriptions.length, 2);
+  controller.load(menu);
   f.subscriptions[2].apply(); f.subscriptions[3].apply(); controller.refresh();
   assert.equal(controller.getSnapshot()!.menu.planetId, 2n);
   assert.equal(controller.getSnapshot()!.incoming.status, 'ready');
@@ -93,15 +97,35 @@ test('timeout and subscription failure show unavailable, release handles and do 
   assert.ok(f.subscriptions.every(s => s.unsubscribe.mock.callCount() === 1));
 });
 
-test('connection/identity changes replace inspector subscriptions without touching another owner', () => {
+test('connection/identity changes require a new click without touching another owner', () => {
   const f = setup(), other = setup(); let menu = f.menu;
   const controller = new PlanetInspector(() => menu); onCleanup(() => controller.dispose());
   const external = f.conn.subscriptionBuilder().subscribe('external');
-  controller.refresh(); menu = { ...other.menu, identity: 'new' }; controller.refresh();
+  controller.refresh(); controller.load(menu); menu = { ...other.menu, identity: 'new' }; controller.refresh();
   assert.equal(f.subscriptions[0].unsubscribe.mock.callCount(), 0);
   assert.ok(f.subscriptions.slice(1).every(s => s.unsubscribe.mock.callCount() === 1));
-  assert.equal(other.subscriptions.length, 2);
+  assert.equal(other.subscriptions.length, 0);
+  controller.load(menu); assert.equal(other.subscriptions.length, 2);
   external.unsubscribe();
+});
+
+test('only an explicit current-target click subscribes; duplicate clicks and stale clicks cannot request', () => {
+  const f = setup(); let menu: PlanetMenu | null = f.menu;
+  const controller = new PlanetInspector(() => menu); onCleanup(() => controller.dispose());
+  for (let i = 0; i < 5; i++) controller.refresh();
+  assert.equal(f.subscriptions.length, 0);
+  menu = { ...f.menu, planetId: 2n };
+  controller.load(f.menu);
+  assert.equal(f.subscriptions.length, 0, 'click from the old target must not query either target');
+  controller.load(menu); controller.load(menu);
+  assert.equal(f.subscriptions.length, 2);
+  f.subscriptions.forEach(s => s.apply()); controller.refresh(); controller.load(menu);
+  assert.equal(f.subscriptions.length, 2, 'ready data continues using existing subscriptions');
+  menu = null; controller.refresh(); menu = f.menu; controller.refresh();
+  assert.equal(controller.getSnapshot()!.incoming.status, 'idle');
+  assert.equal(f.subscriptions.length, 2, 'reopening does not request');
+  controller.dispose(); controller.load(f.menu);
+  assert.equal(f.subscriptions.length, 2);
 });
 
 function nativeMenu(f: ReturnType<typeof setup>, dial = false) {
@@ -152,6 +176,13 @@ test('inspector UI shows loading, totals, unknown, failures and cleans its root 
   await act(async () => { dispose = mountInspector(controller); });
   onCleanup(() => act(async () => dispose()));
   const root = document.getElementById('swarm-helper-incoming')!.shadowRoot!;
+  assert.equal(root.querySelector('button')!.getAttribute('aria-label'), '查询在途兵力');
+  assert.equal(root.querySelector('button')!.title, '查询在途兵力');
+  assert.equal(root.querySelector('header'), null);
+  assert.equal(f.subscriptions.length, 0);
+  const click = () => act(async () => { root.querySelector('button')!.click(); });
+  await click();
+  assert.ok(root.querySelector('header'));
   assert.match(root.textContent!, /加载中/); assert.doesNotMatch(root.textContent!, /敌方在途/);
   f.add(1n, 'foe', 12350); f.add(2n, 'me', 8600); f.add(3n, 'friend', 2); f.add(4n, 'foe');
   await act(async () => { f.subscriptions.forEach(s => s.apply()); controller.refresh(); });
@@ -161,8 +192,36 @@ test('inspector UI shows loading, totals, unknown, failures and cleans its root 
   assert.match(root.textContent!, /部分舰队兵力未知/);
   await act(async () => { menu = null; controller.refresh(); });
   assert.equal(root.querySelector('section'), null);
-  await act(async () => { menu = f.menu; controller.refresh(); f.subscriptions.at(-1)!.error(); controller.refresh(); });
+  await act(async () => { menu = f.menu; controller.refresh(); });
+  assert.equal(f.subscriptions.length, 2);
+  await click();
+  await act(async () => { f.subscriptions.at(-1)!.error(); controller.refresh(); });
   assert.match(root.textContent!, /数据不可用/);
+  assert.match(root.textContent!, /重新查询/);
+  await click();
+  assert.equal(f.subscriptions.length, 6);
+  assert.match(root.textContent!, /加载中/);
+});
+
+test('query button isolates pointer and keyboard events from game controls and removes listeners', async () => {
+  const f = setup(), controller = new PlanetInspector(() => f.menu);
+  let dispose!: () => void;
+  await act(async () => { dispose = mountInspector(controller); });
+  onCleanup(() => act(async () => dispose()));
+  const gameEvent = mock.fn();
+  const types = ['click', 'pointerdown', 'mousedown', 'keydown', 'keyup'];
+  for (const type of types) window.addEventListener(type, gameEvent, type.startsWith('key'));
+  onCleanup(() => { for (const type of types) window.removeEventListener(type, gameEvent, type.startsWith('key')); });
+  const button = document.getElementById('swarm-helper-incoming')!.shadowRoot!.querySelector('button')!;
+  await act(async () => {
+    for (const type of types) button.dispatchEvent(new window.Event(type, { bubbles: true, composed: true }));
+  });
+  assert.equal(gameEvent.mock.callCount(), 0);
+  assert.equal(f.subscriptions.length, 2);
+  await act(async () => dispose());
+  window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter' }));
+  assert.equal(gameEvent.mock.callCount(), 1);
+  assert.equal(f.launchSwarm.mock.callCount(), 0);
 });
 
 test('overlay stays below the menu when possible and inside viewport near edges', () => {

@@ -9,3 +9,8 @@ strong { margin-left: auto; font-variant-numeric: tabular-nums; }
 .ally strong { color: #8ee2b1; }
 p { margin: 5px 0; color: #c5d1df; }
 footer { margin-top: 7px; }
+button { pointer-events: auto; width: 100%; padding: 6px 10px; border: 1px solid #7dd3fc66; border-radius: 6px; background: #203a50; color: #c7ecff; font: inherit; cursor: pointer; }
+button:hover { background: #2b4c68; }
+button:focus-visible { outline: 2px solid #81ceff; outline-offset: 2px; }
+.incoming-idle { width: 32px; padding: 0; border: 0; background: none; box-shadow: none; }
+.query-icon { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border-radius: 50%; border-color: #7dd3fc44; background: #101a29cc; color: #a7c5d8; }
