@@ -136,8 +136,9 @@ test('small nearby donors do not consume the source limit and hide an affordable
   const cfg = config(); cfg.settings.maxSources = 2;
   const plan = finishPlanning(new SunPlanner().steps(f.world, f.snapshot, cfg, f.snapshot.budgets, new Set()));
   assert.equal(plan.job?.kind, 'sun-supply');
-  assert.equal(plan.job.targetId, 1n); assert.equal(plan.job.sourceId, 4n); assert.equal(plan.job.count, 40);
-  assert.equal(members(plan.job).length, 1);
+  assert.equal(plan.job.targetId, 4n, 'the nearest viable hub is retained');
+  assert.equal(members(plan.job).reduce((n, m) => n + m.count, 0), 40);
+  assert.equal(members(plan.job).length, 2, 'logistics is independent of the direct-attack source cap');
 });
 
 test('sun gathering accounts for a stricter overlapping mode reserve on newly arriving supply', () => {
@@ -223,6 +224,83 @@ test('commander prioritizes one affordable sun, then expands to planet and meteo
   commander.stop(); await run;
 });
 
+function upgradeWorld(size: number) {
+  const f = specialWorld();
+  f.snapshot.owned = Array.from({ length: size }, (_, i) => ({ ...planet(BigInt(i + 1), i, 0, true), level: 1 }));
+  f.snapshot.planets = [...f.snapshot.owned];
+  f.snapshot.budgets = new Map(f.snapshot.owned.map(p => [p.planetId, 200]));
+  f.world.syncInventory = mock.fn(async () => {});
+  return f;
+}
+
+test('planned upgrades use native batches of 200, one interval per batch, and aggregate verified results', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  const f = upgradeWorld(205), batches: { ids: bigint[]; at: number }[] = [], phases: string[] = [];
+  f.world.upgrade = mock.fn(async () => { assert.fail('must not downgrade bulk to individual requests'); });
+  f.world.upgradeMany = async ids => {
+    batches.push({ ids, at: Date.now() });
+    for (const id of ids) { f.snapshot.owned.find(p => p.planetId === id)!.level = 2; f.snapshot.budgets.set(id, 100); }
+  };
+  const commander = new Commander((_mode, state) => { if (phases.at(-1) !== state.phase) phases.push(state.phase); }, () => f.world);
+  const run = commander.start('expansion', config()); await settle();
+  t.mock.timers.tick(600000); await settle();
+  assert.equal(batches.length, 1); assert.equal(batches[0].ids.length, 200);
+  assert.equal(commander.states.expansion.metrics!.upgrades, 200);
+  t.mock.timers.tick(250); await settle();
+  t.mock.timers.tick(1250); await settle();
+  assert.deepEqual(batches.map(batch => batch.ids.length), [200, 5]);
+  assert.ok(batches[1].at - batches[0].at >= 1500);
+  assert.equal(new Set(batches.flatMap(batch => batch.ids)).size, 205);
+  assert.equal(commander.states.expansion.metrics!.upgrades, 205);
+  assert.equal(commander.states.expansion.sent, 0); assert.equal(commander.states.expansion.captured, 0);
+  assert.deepEqual((f.world.syncInventory as any).mock.calls.map((call: any) => call.arguments[0].length), [200, 5]);
+  assert.ok(phases.some(phase => phase.includes('200/200')));
+  commander.stop(); await run;
+});
+
+test('bulk upgrade revalidates each member after waiting and counts only observed level increases', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  const f = upgradeWorld(4); let submitted: bigint[] = []; const phases: string[] = [];
+  f.world.upgradeMany = async ids => { submitted = ids; f.snapshot.owned.find(p => p.planetId === ids[0])!.level = 2; };
+  const commander = new Commander((_mode, state) => phases.push(state.phase), () => f.world), run = commander.start('expansion', config()); await settle();
+  localStorage.setItem('swarm-helper-last-operation-v1', '700000');
+  t.mock.timers.tick(600000); await settle();
+  assert.equal(commander.states.expansion.queue.length, 4);
+  f.snapshot.budgets.set(2n, 0);
+  f.snapshot.owned.find(p => p.planetId === 3n)!.level = 2;
+  t.mock.timers.tick(1500); await settle();
+  assert.deepEqual(submitted, [1n, 4n]);
+  assert.equal(commander.states.expansion.metrics!.upgrades, 1);
+  assert.ok(phases.some(phase => /1\/2.*未确认/.test(phase)));
+  commander.stop(); await run;
+});
+
+test('stopping during the batch interval cancels all unsubmitted upgrades', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  const f = upgradeWorld(3); f.world.upgradeMany = mock.fn(async () => {});
+  const commander = new Commander(() => {}, () => f.world), run = commander.start('expansion', config()); await settle();
+  localStorage.setItem('swarm-helper-last-operation-v1', '700000');
+  t.mock.timers.tick(600000); await settle();
+  assert.equal(commander.states.expansion.queue.length, 3);
+  commander.stop(); await run;
+  assert.equal((f.world.upgradeMany as any).mock.callCount(), 0);
+  assert.equal(commander.states.expansion.queue.length, 0);
+});
+
+test('a rejected bulk upgrade is neither split nor repeated at the same observed levels', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  const f = upgradeWorld(3);
+  f.world.upgradeMany = mock.fn(async () => { throw new Error('batch rejected'); });
+  f.world.upgrade = mock.fn(async () => {});
+  const commander = new Commander(() => {}, () => f.world), run = commander.start('expansion', config()); await settle();
+  t.mock.timers.tick(600000); await settle();
+  t.mock.timers.tick(10000); await settle();
+  assert.equal((f.world.upgradeMany as any).mock.callCount(), 1);
+  assert.equal((f.world.upgrade as any).mock.callCount(), 0);
+  assert.equal(commander.states.expansion.metrics!.upgrades, 0);
+  commander.stop(); await run;
+});
+
 test('commander upgrades a stable rear planet once, synchronizes its inventory and does not count an upgrade as a capture or fleet', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 }); t.mock.method(Math, 'random', () => 0.5);
   const f = specialWorld(); f.snapshot.planets = [f.source]; f.snapshot.budgets.set(1n, 200);
@@ -247,11 +325,13 @@ test('commander completes a fragment-to-sun campaign while continuing ordinary e
   f.world.quote = () => ({ count: 3, travelMs: 1000 });
   f.world.quoteBody = id => (f.snapshot.budgets.get(id) ?? 0) >= 100 ? { count: 100, travelMs: 1000 } : null;
   f.world.launch = mock.fn(async (source, target, count) => { f.snapshot.budgets.set(source, f.snapshot.budgets.get(source)! - count); });
+  f.world.launchGroup = mock.fn(async job => { for (const m of members(job)) f.snapshot.budgets.set(m.sourceId, f.snapshot.budgets.get(m.sourceId)! - m.count); });
   f.world.syncInventory = async () => {};
   const commander = new Commander(() => {}, () => f.world), run = commander.start('expansion', config()); await settle();
-  assert.deepEqual((f.world.launch as any).mock.calls[0].arguments, [3n, 1n, 40]);
+  const supply = (f.world.launchGroup as any).mock.calls[0].arguments[0];
+  assert.equal(supply.targetId, 1n); assert.deepEqual(members(supply).map(m => [m.sourceId, m.count]), [[3n, 40]]);
   t.mock.timers.tick(1500); await settle();
-  assert.deepEqual((f.world.launch as any).mock.calls[1].arguments, [3n, 2n, 3]);
+  assert.deepEqual((f.world.launch as any).mock.calls[0].arguments, [3n, 2n, 3]);
   assert.equal((f.world.launchBody as any).mock.callCount(), 0);
   f.snapshot.budgets.set(1n, 100);
   t.mock.timers.tick(1500); await settle();

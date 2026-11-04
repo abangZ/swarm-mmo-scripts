@@ -2,7 +2,6 @@ import { build } from 'esbuild';
 import { spawnSync } from 'node:child_process';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { planningWorkerPlugin } from './worker.mjs';
 
 const entries = (await readdir('tests')).filter(name => /\.test\.tsx?$/.test(name)).sort();
 if (!entries.length) throw new Error('No test files found.');
@@ -12,7 +11,6 @@ try {
     entryPoints: entries.map(name => join('tests', name)), outdir: directory, outExtension: { '.js': '.mjs' },
     bundle: true, platform: 'node', format: 'esm', packages: 'external', target: 'node22',
     jsx: 'automatic', loader: { '.css': 'text' },
-    plugins: [planningWorkerPlugin],
   });
   const files = entries.map(name => join(directory, name.replace(/\.tsx?$/, '.mjs')));
   const result = spawnSync(process.execPath, ['--test', ...files], { stdio: 'inherit' });

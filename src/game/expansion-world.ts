@@ -1,11 +1,13 @@
 import { assertSession, getAutomationSession, ownedPlanets } from './session';
 import { subscribe } from './subscriptions';
 import type { ExpansionWorld, WorldSnapshot, Fleet } from '../features/expansion/world';
-import { captureMargin, members, targetKey, type Assignment, type ExpansionSettings, type TargetKind } from '../features/expansion/types';
+import { maxUpgradeBatch, captureMargin, members, targetKey, type Assignment, type ExpansionSettings, type TargetKind } from '../features/expansion/types';
 import type { Subscription, AutomationSession, Quote } from './types';
 import { validRoute, arriving, type Route } from '../features/expansion/cooperation';
 import { inZone, type ModeConfig } from '../features/commander/types';
 import { subscriptionBatches } from './subscription-batches';
+import { ProductionTicks } from './economy';
+import { fingerprint } from '../shared/fingerprint';
 
 export function safeQuote(quote: ReturnType<AutomationSession['map']['quoteSend']>): { count: number; travelMs: number } | null {
   if (!quote || quote.outOfRange || quote.exact?.reason !== 'capture') return null;
@@ -22,6 +24,11 @@ export class GameWorld implements ExpansionWorld {
   private tileBatches: string[][] = [];
   private ownerBatches: string[][] = [];
   private configs: ModeConfig[] = [];
+  private production = new ProductionTicks();
+  private quoteCore?: string;
+  private quoteEpoch = 0;
+  private timings = { readTotalMs: 0, readCalls: 0, ownedBodiesMs: 0, quoteMaxMs: 0, slowQuotes: 0, syncCalls: 0, syncQueries: 0, syncTotalMs: 0, syncActive: 0, readMs: 0, scanMs: 0, syncMs: 0, quoteMs: 0, quoteCalls: 0, newSubscriptions: 0, reusedSubscriptions: 0 };
+  diagnostics() { return { ...this.timings }; }
   configure(configs: ModeConfig[]) { this.configs = configs; }
   needsScan() {
     assertSession(this.session);
@@ -29,6 +36,8 @@ export class GameWorld implements ExpansionWorld {
   }
   async scan(settings: ExpansionSettings, alive: () => boolean): Promise<void> {
     assertSession(this.session);
+    const started = performance.now();
+    this.timings.newSubscriptions = 0; this.timings.reusedSubscriptions = 0;
     const identity = this.session.identity;
     if (!/^[0-9a-f]{64}$/i.test(identity)) throw new Error('游戏身份格式发生变化。');
     const fresh = new Map<string, Subscription>();
@@ -38,8 +47,9 @@ export class GameWorld implements ExpansionWorld {
       if (existing) {
         if (!existing.isActive()) throw new Error('星球订阅已失效，请重新启动。');
         if (!alive()) throw new Error('扫描已停止。');
-        fresh.set(query, existing); return;
+        this.timings.reusedSubscriptions++; fresh.set(query, existing); return;
       }
+      this.timings.newSubscriptions++;
       const handle = await subscribe(this.session.conn, query);
       fresh.set(query, handle); created.push(handle);
       if (!alive()) throw new Error('扫描已停止。');
@@ -94,7 +104,7 @@ export class GameWorld implements ExpansionWorld {
     } catch (error) {
       for (const sub of created) sub.unsubscribe();
       throw error;
-    }
+    } finally { this.timings.scanMs = performance.now() - started; }
   }
   refreshQuotes(): void {
     assertSession(this.session);
@@ -104,11 +114,15 @@ export class GameWorld implements ExpansionWorld {
     this.quotes.clear(); // A browser yield ends this synchronous quote-cache lifetime.
   }
   read(): WorldSnapshot {
+    const started = performance.now();
     this.refreshQuotes();
     const allOwned = ownedPlanets(this.session);
     const owned = allOwned.filter(p => this.scannedSources.has(p.planetId) || this.configs.some(c => c.policy.zone && inZone(p, c.policy.zone)));
     const budgets = new Map<bigint, number>();
-    for (const body of this.session.map.listOwnedBodies()) {
+    const ownedAt = performance.now();
+    const bodies = this.session.map.listOwnedBodies();
+    this.timings.ownedBodiesMs = performance.now() - ownedAt;
+    for (const body of bodies) {
       if (body.kind === 'planet' && Number.isSafeInteger(body.probes) && body.probes >= 0) budgets.set(body.id, Math.min(body.probes, 0xffffffff));
     }
     const incoming = new Set<bigint>();
@@ -127,7 +141,7 @@ export class GameWorld implements ExpansionWorld {
       const count = Number.isSafeInteger(f.probeCount) && f.probeCount! >= 0 ? f.probeCount! : null;
       const time = Number(f.arrivalTime?.toMillis());
       const source = positions.get(`${f.sourceX},${f.sourceY}`), target = targets.get(f.targetPlanetId);
-      return { id: f.swarmId, owner: f.ownerId.toHexString(), target: f.targetPlanetId, count, arrival: Number.isFinite(time) ? time : null,
+      return { id: f.swarmId, owner: f.ownerId.toHexString(), target: f.targetPlanetId, source: source?.planetId, count, arrival: Number.isFinite(time) ? time : null,
         arriving: source && target && source.galaxyId === target.galaxyId ? count : null };
     });
     const fleetsByTarget = new Map<bigint, Fleet[]>();
@@ -145,7 +159,35 @@ export class GameWorld implements ExpansionWorld {
       if (row.targetMeteoriteId && row.targetMeteoriteId > 0n) addBodyFleet(row.targetMeteoriteId, 'comet', row);
     }
     for (const row of db.sun_swarm2?.iter() ?? []) if (!row.targetBlackHole && row.targetSunId > 0n) addBodyFleet(row.targetSunId, 'sun', row);
-    return { planets, owned, allOwned, budgets, incoming, fleets, fleetsByTarget, identity: this.session.identity, allies, intelligence: true,
+    // Quote rules depend on technology and coverage, not unrelated garrisons.
+    // Source/target stock and rows are compared separately by the planner.
+    const coverage = (row: unknown) => {
+      const { probeCount: _probes, superprobes: _super, lastUpdateTick: _tick, ...rest } = row as Record<string, unknown>;
+      return { ...rest, activeBase: typeof _super === 'number' ? _super > 0 : undefined };
+    };
+    const tech = [...db.player_tech.iter()];
+    const assault = tech.find(row => row.playerId.toHexString() === this.session.identity)?.assault;
+    // Native Hx(assault) = 1 + 0.01 * assault. Assuming coverage is optimistic;
+    // missing/unknown technology disables this cheap rejection entirely.
+    const attackMultiplierUpperBound = Number.isSafeInteger(assault) && assault! >= 0 ? 1 + 0.01 * assault! : undefined;
+    // SDK row replacement can reorder iterators without changing any quote rule.
+    // Such changes must not discard a long-running draft or its quote cache.
+    const unordered = (rows: Iterable<unknown>) => [...rows].map(fingerprint).sort();
+    const quoteVersion = fingerprint([this.session.identity, unordered(tech.filter(row => row.playerId.toHexString() === this.session.identity)), unordered(clans),
+      unordered([...db.base.iter()].map(coverage)), unordered([...db.sun2.iter()].map(coverage)), unordered(db.galaxy?.iter() ?? [])]);
+    const productionTicks = this.production.read(db, owned, allies, this.session.identity, quoteVersion);
+    // Native Ft/vx/wx/bx/Cx read source-owner technology and source influence.
+    // Neutral target stock/geometry are tracked per quote; galaxy geometry is
+    // conservatively global. Unrelated clans and distant coverage do not affect it.
+    const core = fingerprint([this.session.identity, unordered(tech.filter(row => row.playerId.toHexString() === this.session.identity)), unordered(db.galaxy?.iter() ?? [])]);
+    if (core !== this.quoteCore) { this.quoteCore = core; this.quoteEpoch++; }
+    const quoteGlobalVersion = `${this.session.identity}:${this.quoteEpoch}`;
+    const sourceQuoteVersions = new Map(owned.map(p => [p.planetId, fingerprint([
+      quoteGlobalVersion, p.ownerId, p.positionX, p.positionY, p.galaxyId, p.level, this.production.covered(p.planetId),
+    ])]));
+    this.timings.readMs = performance.now() - started;
+    this.timings.readCalls++; this.timings.readTotalMs += this.timings.readMs;
+    return { productionTicks, quoteVersion, quoteGlobalVersion, sourceQuoteVersions, attackMultiplierUpperBound, planets, owned, allOwned, budgets, incoming, fleets, fleetsByTarget, identity: this.session.identity, allies, intelligence: true,
       suns: [...db.sun2.iter()], meteorites: [...(db.meteorite2?.iter() ?? [])], bodyFleets,
       automated: new Set([...db.attack_automation.iter()].map(a => a.sourcePlanetId).concat([...db.upgrade_automation.iter()].map(a => a.planetId))),
       players: new Map([...(db.player?.iter() ?? [])].map(p => [p.identity.toHexString(), p.username])),
@@ -153,7 +195,15 @@ export class GameWorld implements ExpansionWorld {
   }
   private nativeQuote(source: bigint, target: bigint, kind: TargetKind = 'planet'): Quote | null {
     const key = `${source}:${targetKey(target, kind)}`;
-    if (!this.quotes.has(key)) this.quotes.set(key, this.session.map.quoteSend('planet', source, kind, target));
+    if (!this.quotes.has(key)) {
+      const started = performance.now();
+      try { this.timings.quoteCalls++; this.quotes.set(key, this.session.map.quoteSend('planet', source, kind, target)); }
+      finally {
+        const ms = performance.now() - started;
+        this.timings.quoteMs += ms; this.timings.quoteMaxMs = Math.max(this.timings.quoteMaxMs, ms);
+        if (ms >= 8) this.timings.slowQuotes++;
+      }
+    }
     return this.quotes.get(key)!;
   }
   quote(source: bigint, target: bigint) { return safeQuote(this.nativeQuote(source, target)); }
@@ -178,6 +228,14 @@ export class GameWorld implements ExpansionWorld {
       || !Number.isSafeInteger(quote.exact.probes) || quote.exact.probes < 1 || quote.exact.probes > 0xffffffff) return null;
     return { count: quote.exact.probes, travelMs: quote.travelMs };
   }
+  bodyQuoteIssue(source: bigint, target: bigint, kind: 'sun' | 'comet') {
+    const quote = this.nativeQuote(source, target, kind);
+    if (!quote) return '原生未返回报价，来源或目标情报可能不完整';
+    if (!validRoute(quote)) return '原生航时或航行损耗无效';
+    if (quote.outOfRange) return `原生判定无法发射：航时 ${Math.ceil(quote.travelMs / 1000)} 秒、损耗 ${quote.lossPct}%${quote.exact?.reason === 'capture' ? `、原生需 ${quote.exact.probes} 探针` : ''}`;
+    if (quote.exact?.reason !== 'capture') return `原生未给出占领报价（${quote.exact?.reason ?? '无数量说明'}）`;
+    return this.quoteBody(source, target, kind) ? undefined : '原生占领数量无效或超过单次发射上限';
+  }
   routeBody(source: bigint, target: bigint, kind: 'sun' | 'comet'): Route | null {
     const quote = this.nativeQuote(source, target, kind);
     return validRoute(quote) ? { travelMs: quote.travelMs, lossPct: quote.lossPct } : null;
@@ -194,14 +252,28 @@ export class GameWorld implements ExpansionWorld {
     if (!this.session.conn.reducers.upgradePlanet) throw new Error('原生升级接口不可用。');
     return this.session.conn.reducers.upgradePlanet({ planetId });
   }
-  async syncInventory(sources: bigint[]): Promise<void> {
+  upgradeMany(planetIds: bigint[]): Promise<void> {
     assertSession(this.session);
-    const ids = [...new Set(sources)];
-    // A fresh subscription acknowledgement is an inventory barrier after a confirmed launch.
-    // Keep the original owned subscription; these temporary queries only refresh spent sources.
-    for (let i = 0; i < ids.length; i += 24) {
-      const handle = await subscribe(this.session.conn, `SELECT * FROM planet WHERE ${ids.slice(i, i + 24).map(id => `planet_id = ${id}`).join(' OR ')}`);
-      try { assertSession(this.session); } finally { handle.unsubscribe(); }
+    if (!planetIds.length || planetIds.length > maxUpgradeBatch || new Set(planetIds).size !== planetIds.length) throw new Error('批量升级需要 1～200 颗不同星球。');
+    if (!this.session.conn.reducers.upgradePlanetsBulk) throw new Error('原生批量升级接口不可用。');
+    return this.session.conn.reducers.upgradePlanetsBulk({ planetIds });
+  }
+  async syncInventory(sources: bigint[]): Promise<void> {
+    this.timings.syncCalls++; this.timings.syncActive++;
+    const started = performance.now();
+    try {
+      assertSession(this.session);
+      const ids = [...new Set(sources)];
+      // A fresh subscription acknowledgement is an inventory barrier after a confirmed launch.
+      // Keep the original owned subscription; these temporary queries only refresh spent sources.
+      for (let i = 0; i < ids.length; i += 24) {
+        this.timings.syncQueries++;
+        const handle = await subscribe(this.session.conn, `SELECT * FROM planet WHERE ${ids.slice(i, i + 24).map(id => `planet_id = ${id}`).join(' OR ')}`);
+        try { assertSession(this.session); } finally { handle.unsubscribe(); }
+      }
+    } finally {
+      this.timings.syncMs = performance.now() - started;
+      this.timings.syncTotalMs += this.timings.syncMs; this.timings.syncActive--;
     }
   }
   launch(source: bigint, target: bigint, count: number) {

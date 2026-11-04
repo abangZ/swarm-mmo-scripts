@@ -28,6 +28,11 @@ h2 { font-size: 16px; letter-spacing: .3px; }
 h3 { font-size: 13px; font-weight: 600; }
 p { margin-top: 10px; color: #aebed2; font-size: 12px; }
 label { display: block; margin: 12px 0 5px; color: #c4d0e0; font-size: 12px; }
+.setting-heading { position: relative; display: flex; align-items: center; gap: 6px; margin: 12px 0 5px; }
+.setting-heading label { margin: 0; }
+.setting-help { display: inline-flex; flex-shrink: 0; }
+.help-trigger { width: 18px; height: 18px; padding: 0; border-radius: 50%; color: #9db3cc; font-size: 11px; line-height: 16px; background: transparent; }
+.setting-tip { position: absolute; top: 100%; left: 0; width: 100%; z-index: 10; padding: 10px 12px; border: 1px solid #49617e; border-radius: 8px; background: #1a2b40; box-shadow: 0 4px 16px #0008; color: #d3dfed; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
 select, input { width: 100%; }
 .strategy-toggle { display: flex; align-items: center; gap: 8px; }
 .strategy-toggle input { width: 16px; height: 16px; padding: 0; flex-shrink: 0; }

@@ -1,62 +1,48 @@
-import { planningSnapshot, type PlanningRequest, type PlanningResponse, type QuoteRow } from './planner-work';
 import type { ExpansionWorld, WorldSnapshot } from './world';
 import type { ModeConfig } from '../commander/types';
+import { expansionProposalSteps } from './proposals';
+import { expansionPlanSteps } from './planner';
+import type { Assignment } from './types';
+import { runPlanning, planningTiming } from '../../runtime/planning';
+import { fingerprint } from '../../shared/fingerprint';
 import type { ExpansionProposals } from './proposals';
-import type { Assignment, Plan } from './types';
-import { runPlanning } from '../../runtime/planning';
+import { CandidateSearch } from './candidate-search';
+import { globalQuoteRules } from './quote-rules';
 
-declare const __EXPANSION_WORKER__: string;
-
+// The game's CSP disallows blob workers. Keep planning independent of dispatch,
+// but cooperate with the page scheduler instead of starting a blocked worker.
 export class BackgroundPlanner {
-  private worker?: Worker;
-  dispose() { this.worker?.terminate(); this.worker = undefined; }
-  private request<T>(message: PlanningRequest, world: ExpansionWorld, signal: AbortSignal, current: () => boolean): Promise<T | undefined> {
-    if (signal.aborted || !current()) return Promise.resolve(undefined);
-    if (!this.worker) {
-      const url = URL.createObjectURL(new Blob([__EXPANSION_WORKER__], { type: 'text/javascript' }));
-      try { this.worker = new Worker(url); } finally { URL.revokeObjectURL(url); }
+  private revision = 0;
+  timing = planningTiming();
+  resetTiming() { this.timing = planningTiming(); }
+  private previous?: { key: string; result: ExpansionProposals; expires: number };
+  private search = new CandidateSearch();
+  private searchKey?: string;
+  dispose() { this.revision++; this.previous = undefined; this.search = new CandidateSearch(); this.searchKey = undefined; }
+  private run<T>(steps: Generator<void, T>, signal: AbortSignal, current: () => boolean, refresh = () => {}) {
+    const revision = this.revision;
+    const active = () => !signal.aborted && revision === this.revision && current();
+    if (active()) refresh();
+    return runPlanning(steps, active, refresh, undefined, 8, this.timing, 12);
+  }
+  async proposals(world: ExpansionWorld, snapshot: WorldSnapshot, config: ModeConfig, budgets: Map<bigint, number>, locked: Set<bigint>, signal: AbortSignal, current: () => boolean, progress?: (completed: number, total: number) => void) {
+    const revision = this.revision;
+    const key = snapshot.quoteVersion === undefined ? undefined : fingerprint([snapshot.quoteVersion, config, snapshot.planets, snapshot.owned,
+      [...budgets], [...locked], [...snapshot.incoming], snapshot.fleets, [...snapshot.fleetsByTarget ?? []], snapshot.attackMultiplierUpperBound, [...snapshot.automated ?? []], snapshot.intelligence, snapshot.identity, [...snapshot.allies ?? []]]);
+    if (!this.search.pending && key && this.previous?.key === key && this.previous.expires > Date.now() && !signal.aborted && current()) {
+      progress?.(this.previous.result.sources.length, this.previous.result.sources.length);
+      return this.previous.result;
     }
-    const worker = this.worker;
-    return new Promise((resolve, reject) => {
-      let finished = false;
-      const cleanup = () => { finished = true; signal.removeEventListener('abort', abort); worker.onmessage = null; worker.onerror = null; };
-      const abort = () => { if (finished) return; cleanup(); this.dispose(); resolve(undefined); };
-      const fail = (error: unknown) => { if (finished) return; cleanup(); this.dispose(); reject(error); };
-      signal.addEventListener('abort', abort, { once: true });
-      worker.onerror = event => fail(new Error(event.message || '后台规划线程异常'));
-      worker.onmessage = async (event: MessageEvent<PlanningResponse>) => {
-        if (!current()) { abort(); return; }
-        const reply = event.data;
-        try {
-          if (reply.type === 'error') throw new Error(reply.message);
-          if (reply.type === 'quotes') {
-            // quoteSend reads the native in-memory map. Each batch is bounded and
-            // refreshed after yielding; no extra subscriptions or HTTP requests.
-            const rows: QuoteRow[] = [];
-            const request = reply.request;
-            world.refreshQuotes?.();
-            function* collect() {
-              for (const target of request.targets) {
-                rows.push({ target, route: world.route?.(request.source, target) ?? null, quote: world.quote(request.source, target) });
-                yield;
-              }
-              return rows;
-            }
-            const result = await runPlanning(collect(), current, () => world.refreshQuotes?.());
-            if (finished) return;
-            if (!result || !current()) { abort(); return; }
-            worker.postMessage({ type: 'quotes', rows: result } satisfies PlanningRequest);
-          } else { cleanup(); resolve(reply.result as T); }
-        } catch (error) { fail(error); }
-      };
-      try { worker.postMessage(message); } catch (error) { fail(error); }
-    });
+    const searchKey = fingerprint([globalQuoteRules(snapshot), snapshot.identity, config]);
+    const search = (searchKey === this.searchKey ? this.search : new CandidateSearch()).fork(snapshot.owned);
+    const result = await this.run(expansionProposalSteps(world, snapshot, config, budgets, locked, progress, search), signal, current, () => world.refreshQuotes?.());
+    if (result && revision === this.revision && !signal.aborted && current()) {
+      this.search = search; this.searchKey = searchKey;
+      this.previous = key ? { key, result, expires: Date.now() + (snapshot.fleets?.length ? 1000 : 30000) } : undefined;
+    }
+    return result;
   }
-  proposals(world: ExpansionWorld, snapshot: WorldSnapshot, config: ModeConfig, budgets: Map<bigint, number>, locked: Set<bigint>, signal: AbortSignal, current: () => boolean) {
-    return this.request<ExpansionProposals>({ type: 'proposals', snapshot: planningSnapshot(snapshot), config, budgets, locked,
-      groups: !!world.launchGroup && world.supportsGroup?.() !== false }, world, signal, current);
-  }
-  plan(world: ExpansionWorld, edges: Assignment[], budgets: Map<bigint, number>, interval: number, horizon: number, travel: number, delay: number, signal: AbortSignal, current: () => boolean) {
-    return this.request<Plan>({ type: 'plan', edges, budgets, interval, horizon, travel, delay }, world, signal, current);
+  plan(_world: ExpansionWorld, edges: Assignment[], budgets: Map<bigint, number>, interval: number, horizon: number, travel: number, delay: number, signal: AbortSignal, current: () => boolean) {
+    return this.run(expansionPlanSteps(edges, budgets, interval, horizon, travel, delay), signal, current);
   }
 }

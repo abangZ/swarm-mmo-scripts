@@ -97,7 +97,7 @@ class RallyPlanner {
       const feasible: { target: Planet; travelMs: number }[] = [];
       const pool = attackCandidates(hub, index.near(hub, config.settings.radius), Math.max(32, config.settings.candidates * 8));
       for (const [i, target] of pool.entries()) {
-        if (i % 8 === 0) yield;
+        yield;
         const quote = attackQuote(world, snapshot, hub, target, config, true);
         if (quote) feasible.push({ target, travelMs: quote.travelMs });
         if (feasible.length >= 3 && i >= 5) break;
@@ -135,7 +135,7 @@ class RallyPlanner {
     const near = [...eligible].sort((a, b) => distance(a, hub) - distance(b, hub)).slice(0, maxDonors / 2);
     const strong = [...eligible].sort((a, b) => (budgets.get(b.planetId) ?? 0) - (budgets.get(a.planetId) ?? 0)).slice(0, maxDonors / 2);
     for (const [i, p] of [...new Map([...near, ...strong, ...eligible].map(p => [p.planetId, p])).values()].slice(0, maxDonors).entries()) {
-      if (i % 16 === 0) yield;
+      yield;
       const route = world.route?.(p.planetId, hub.planetId);
       if (validRoute(route) && route.travelMs <= config.policy.rallyMs) result.push({ planet: p, available: budgets.get(p.planetId)!, ...route });
     }

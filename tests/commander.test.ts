@@ -8,8 +8,49 @@ import { fakeWorld, planet, settle } from './helpers/fixtures';
 import { unresolved, withControl } from '../src/runtime/operations';
 import { planAttack } from '../src/features/attack/planner';
 import { reserveFor } from '../src/features/commander/safety';
+import { OffensivePlanner } from '../src/features/attack/rally';
 
 const enemy = 'a'.repeat(64);
+
+test('attack consumes its planned queue without empire replanning and refreshes each dispatch price', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  const f = fixture(false);
+  for (const id of [10n, 11n, 12n]) f.snapshot.planets.push({ ...planet(id, Number(id) - 7, 0), level: 1, ownerId: f.hostile.ownerId });
+  f.world.syncInventory = async () => {};
+  f.world.launch = async (source, target, count) => {
+    f.snapshot.budgets.set(source, f.snapshot.budgets.get(source)! - count);
+    f.launches.push({ source, target, count, time: Date.now() });
+  };
+  const original = OffensivePlanner.prototype.steps;
+  const plans = t.mock.method(OffensivePlanner.prototype, 'steps', original);
+  const run = f.commander.start('attack', { ...config(), settings: { ...config().settings, scanMs: 30000 } }); await settle();
+  assert.equal(f.launches.length, 1); assert.equal(plans.mock.callCount(), 1);
+  // The second quote increases by 3; only 4 unreserved probes remain. It may
+  // use those, but cannot spend the 48 already allocated to later attacks.
+  f.world.quote = (_source, target) => ({ count: target === 10n ? 15 : 12, travelMs: 1000 });
+  for (let i = 0; i < 3; i++) { t.mock.timers.tick(1000); await settle(); }
+  assert.deepEqual(f.launches.map(l => l.count), [24, 27, 24, 24]);
+  assert.equal(plans.mock.callCount(), 1);
+  assert.equal(f.snapshot.budgets.get(1n), 1);
+  f.commander.stop(); t.mock.timers.tick(500); await run;
+});
+
+test('an invalid or more expensive queued attack releases its allocation without consuming other jobs', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  const f = fixture(false);
+  for (const id of [10n, 11n]) f.snapshot.planets.push({ ...planet(id, Number(id) - 7, 0), level: 1, ownerId: f.hostile.ownerId });
+  f.snapshot.budgets.set(1n, 72);
+  f.world.syncInventory = async () => {};
+  f.world.launch = async (source, target, count) => {
+    f.snapshot.budgets.set(source, f.snapshot.budgets.get(source)! - count);
+    f.launches.push({ source, target, count, time: Date.now() });
+  };
+  const run = f.commander.start('attack', config()); await settle();
+  f.world.quote = (_source, target) => ({ count: target === 10n ? 30 : 12, travelMs: 1000 });
+  for (let i = 0; i < 5; i++) { t.mock.timers.tick(250); await settle(); }
+  assert.deepEqual(f.launches.map(l => l.target), [9n, 11n]);
+  f.commander.stop(); t.mock.timers.tick(500); await run;
+});
 const config = (x = 0): ModeConfig => ({ settings: { ...defaults, maxSources: 1 }, policy: { ...defaultPolicy, zone: { x, y: 0, radius: 10 }, frontlinePercent: 0 } });
 function fixture(separate = true) {
   const f = fakeWorld(); f.source.level = 10; f.target.level = 1;
@@ -311,7 +352,8 @@ test('attack keeps its one-second cadence while expansion is still yielding thro
   const quote = f.world.quote; f.world.quote = (source, target) => { if (target === 2n) clock += 10; return quote(source, target); };
   const run = f.commander.start('expansion', config()); f.commander.start('attack', config(100)); await settle();
   for (let i = 0; i < 13; i++) { t.mock.timers.tick(250); await settle(); }
-  assert.equal(f.commander.states.expansion.sent, 0, 'expansion has not completed its first sliced plan');
-  assert.deepEqual(f.launches.map(l => l.time), [100250, 101250, 102250, 103250]);
+  assert.ok(f.commander.states.expansion.work?.plan, 'the full expansion draft is still computing');
+  assert.equal(f.commander.states.expansion.sent, 1, 'the small frontier draft can dispatch before the full plan completes');
+  assert.deepEqual(f.launches.filter(l => l.target !== 2n).map(l => l.time), [100250, 101250, 102250, 103250]);
   f.commander.stop(); t.mock.timers.tick(0); await run;
 });

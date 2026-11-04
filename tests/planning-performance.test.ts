@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { bestCandidates } from '../src/shared/best-candidates';
 import { PlanetIndex } from '../src/shared/planet-index';
 import { subscriptionBatches } from '../src/game/subscription-batches';
-import { runPlanning } from '../src/runtime/planning';
+import { runPlanning, planningTiming } from '../src/runtime/planning';
 import { expansionProposals, expansionProposalSteps } from '../src/features/expansion/proposals';
 import { planExpansion, expansionPlanSteps } from '../src/features/expansion/planner';
 import { defaults, members } from '../src/features/expansion/types';
@@ -14,6 +14,39 @@ import { withControl, unresolved } from '../src/runtime/operations';
 import { fakeWorld, planet, settle } from './helpers/fixtures';
 
 const config = (): ModeConfig => ({ settings: { ...defaults, radius: 64 }, policy: { ...defaultPolicy, frontlinePercent: 0 } });
+
+test('planning timing separates native/algorithm work, scheduler delay and memory refresh', async t => {
+  let time = 0;
+  t.mock.method(performance, 'now', () => time);
+  const timing = planningTiming();
+  function* steps() { time += 12; yield; time += 4; return 42; }
+  const result = await runPlanning(steps(), () => true, () => { time += 5; }, async () => {
+    assert.equal(timing.waitingSince, 12); time += 80;
+  }, 8, timing);
+  assert.equal(result, 42);
+  assert.equal(timing.computeMs, 16); assert.equal(timing.waitMs, 80); assert.equal(timing.refreshMs, 5);
+  assert.equal(timing.slices, 1); assert.equal(timing.waitingSince, undefined);
+});
+
+test('bounded adaptive slices reduce expensive scheduling waits without changing default or frontier slices', async t => {
+  let time = 0;
+  t.mock.method(performance, 'now', () => time);
+  const measure = async (maxSlice: number, wait: number) => {
+    const timing = planningTiming(), spans: number[] = [];
+    let resumed = time;
+    function* steps() { for (let i = 0; i < 120; i++) { yield; time += 2; } return 120; }
+    const value = await runPlanning(steps(), () => true, () => { resumed = time; }, async () => {
+      spans.push(time - resumed); time += wait;
+    }, 8, timing, maxSlice);
+    assert.equal(value, 120); assert.equal(timing.computeMs, 240);
+    return { timing, spans };
+  };
+  const fixed = await measure(8, 10), adaptive = await measure(12, 10), cheap = await measure(12, 0);
+  assert.ok(adaptive.timing.waitMs < fixed.timing.waitMs * 0.75);
+  assert.equal(adaptive.spans[0], 8, 'first slow quote still yields at the original deadline');
+  assert.ok(adaptive.spans.every(ms => ms <= 12));
+  assert.ok(cheap.spans.every(ms => ms === 8), 'cheap scheduling does not enlarge slices');
+});
 
 test('bounded selection exactly matches stable full sorting, including ties and interleaved candidate backfill', () => {
   const items = Array.from({ length: 4000 }, (_, i) => ({ id: i, x: i % 64 - 32, y: Math.floor(i / 64) - 32, stock: i % 8 + 1, level: i % 10 + 1 }));

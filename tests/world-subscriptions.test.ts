@@ -28,6 +28,90 @@ function setup() {
   return { ...f, world, queries, source, target, owner, native, onQuery: (fn: typeof onQuery) => { onQuery = fn; } };
 }
 
+test('diagnostics distinguish slow native memory quotations from actual inventory subscriptions', async t => {
+  const f = setup(); t.after(() => f.world.dispose());
+  await f.world.scan(defaults, () => true);
+  let time = 0; t.mock.method(performance, 'now', () => time);
+  f.native.mock.mockImplementation(() => { time += 12; return { travelMs: 200000, lossPct: 0, outOfRange: false, exact: { reason: 'capture', probes: 8 } }; });
+  f.queries.length = 0;
+  f.world.read(); f.world.route(1n, 2n); f.world.quote(1n, 2n);
+  assert.equal(f.world.diagnostics().quoteCalls, 1, 'route and capture share one native call per slice');
+  assert.equal(f.world.diagnostics().quoteMs, 12); assert.equal(f.world.diagnostics().quoteMaxMs, 12);
+  assert.equal(f.world.diagnostics().slowQuotes, 1); assert.equal(f.queries.length, 0);
+  assert.equal(f.world.diagnostics().readCalls, 1);
+  f.onQuery(() => { time += 50; });
+  await f.world.syncInventory([1n, 1n]);
+  assert.equal(f.world.diagnostics().syncCalls, 1); assert.equal(f.world.diagnostics().syncQueries, 1);
+  assert.equal(f.world.diagnostics().syncMs, 50); assert.equal(f.world.diagnostics().syncTotalMs, 50);
+  assert.equal(f.world.diagnostics().syncActive, 0); assert.equal(f.queries.length, 1);
+});
+
+test('meteorite skip diagnostics reuse the native quote and expose its rejected requirement', async t => {
+  const f = setup(); t.after(() => f.world.dispose());
+  await f.world.scan(defaults, () => true);
+  f.native.mock.mockImplementation(() => ({ travelMs: 200000, lossPct: 10, outOfRange: true, exact: { reason: 'capture', probes: 800 } }));
+  assert.equal(f.world.quoteBody(1n, 2n, 'comet'), null);
+  assert.match(f.world.bodyQuoteIssue(1n, 2n, 'comet')!, /航时 200 秒、损耗 10%、原生需 800 探针/);
+  assert.equal(f.native.mock.callCount(), 1, 'diagnostic text must not issue a second quote');
+});
+
+test('native quote dependency version follows technology, galaxy geometry and active coverage rather than unrelated stock', async t => {
+  const f = setup(); t.after(() => f.world.dispose());
+  const tech = { playerId: f.owner, assault: 10 };
+  const base = { baseId: 10n, ownerId: f.owner, positionX: 0, positionY: 0, level: 1, superprobes: 2 };
+  const sun = { sunId: 20n, ownerId: f.owner, positionX: 1, positionY: 1, galaxyId: 1n, probeCount: 20 };
+  const galaxy = { id: 1n, x: 0, y: 0 };
+  Object.assign(f.session.conn.db, { player_tech: { iter: () => [tech] }, base: { iter: () => [base] },
+    sun2: { iter: () => [sun] }, galaxy: { iter: () => [galaxy] } });
+  await f.world.scan(defaults, () => true);
+  const initial = f.world.read(); assert.equal(initial.attackMultiplierUpperBound, 1.1);
+  base.superprobes = 1; sun.probeCount++;
+  assert.equal(f.world.read().quoteVersion, initial.quoteVersion);
+  base.superprobes = 0;
+  const inactive = f.world.read().quoteVersion; assert.notEqual(inactive, initial.quoteVersion);
+  tech.assault++;
+  const upgraded = f.world.read().quoteVersion; assert.notEqual(upgraded, inactive);
+  galaxy.x++;
+  assert.notEqual(f.world.read().quoteVersion, upgraded);
+});
+
+test('SDK iterator reordering does not invalidate quotes, while actual coverage changes do', async t => {
+  const f = setup(); t.after(() => f.world.dispose());
+  const bases = [1n, 2n].map(baseId => ({ baseId, ownerId: f.owner, positionX: Number(baseId), positionY: 0, superprobes: 1 }));
+  const suns = [3n, 4n].map(sunId => ({ sunId, ownerId: f.owner, positionX: Number(sunId), positionY: 0, galaxyId: 1n, probeCount: 20 }));
+  const galaxies = [{ id: 1n, x: 0 }, { id: 2n, x: 10 }];
+  const clans = [{ playerId: f.owner, clanId: 1n }, { playerId: { toHexString: () => '1'.repeat(64) }, clanId: 1n }];
+  Object.assign(f.session.conn.db, { base: { iter: () => bases }, sun2: { iter: () => suns }, galaxy: { iter: () => galaxies }, clan_member2: { iter: () => clans } });
+  await f.world.scan(defaults, () => true);
+  const before = f.world.read().quoteVersion;
+  for (const rows of [bases, suns, galaxies, clans]) rows.reverse();
+  assert.equal(f.world.read().quoteVersion, before);
+  bases[0].superprobes = 0;
+  assert.notEqual(f.world.read().quoteVersion, before);
+});
+
+test('source quote rules isolate influence changes and still invalidate technology and galaxy changes', async t => {
+  const f = setup(); t.after(() => f.world.dispose());
+  f.target.ownerId = f.owner; f.target.positionX = 40;
+  const tech = { playerId: f.owner, velocity: 10 };
+  const near = { baseId: 10n, ownerId: f.owner, positionX: 0, positionY: 0, level: 1, superprobes: 1 };
+  const far = { ...near, baseId: 11n, positionX: 1000 };
+  const galaxy = { id: 1n, x: 0, y: 0 };
+  Object.assign(f.session.conn.db, { player_tech: { iter: () => [tech] }, base: { iter: () => [near, far] }, galaxy: { iter: () => [galaxy] } });
+  await f.world.scan(defaults, () => true);
+  const initial = f.world.read();
+  far.superprobes = 0; const distant = f.world.read();
+  assert.notEqual(distant.quoteVersion, initial.quoteVersion);
+  assert.equal(distant.quoteGlobalVersion, initial.quoteGlobalVersion);
+  assert.deepEqual(distant.sourceQuoteVersions, initial.sourceQuoteVersions);
+  near.superprobes = 0; const local = f.world.read();
+  assert.notEqual(local.sourceQuoteVersions!.get(1n), initial.sourceQuoteVersions!.get(1n));
+  assert.equal(local.sourceQuoteVersions!.get(2n), initial.sourceQuoteVersions!.get(2n));
+  tech.velocity++; const upgraded = f.world.read();
+  for (const id of [1n, 2n]) assert.notEqual(upgraded.sourceQuoteVersions!.get(id), local.sourceQuoteVersions!.get(id));
+  galaxy.x++; assert.notEqual(f.world.read().quoteGlobalVersion, upgraded.quoteGlobalVersion);
+});
+
 test('unchanged scans reuse live subscriptions and covered captures become sources without a network reload', async t => {
   const f = setup(); t.after(() => f.world.dispose());
   await f.world.scan(defaults, () => true);
@@ -42,6 +126,29 @@ test('unchanged scans reuse live subscriptions and covered captures become sourc
   assert.deepEqual(f.world.read().owned.map(p => p.planetId), [1n, 2n]);
   assert.equal(f.world.needsScan(), false); assert.equal(f.queries.length, 0);
   assert.equal(f.launchSwarm.mock.callCount(), 0);
+});
+
+test('production forecasts and repeated native quotes read SDK memory without new subscriptions', async t => {
+  const f = setup(); t.after(() => f.world.dispose());
+  const tech = { playerId: f.owner, construction: 200 };
+  const sun = { sunId: 20n, ownerId: f.owner, positionX: 8, positionY: 0, galaxyId: 1n, probeCount: 20 };
+  const base = { baseId: 30n, ownerId: f.owner, positionX: 1, positionY: 0, level: 1, superprobes: 1 };
+  Object.assign(f.session.conn.db, { player_tech: { iter: () => [tech] }, sun2: { iter: () => [sun] }, base: { iter: () => [base] } });
+  await f.world.scan(defaults, () => true);
+  const subscriptions = f.queries.length;
+  assert.equal(f.world.read().productionTicks!.get(1n), 30000);
+  sun.positionX = 9; base.superprobes = 0;
+  assert.equal(f.world.read().productionTicks!.get(1n), 60000);
+  base.superprobes = 1;
+  assert.equal(f.world.read().productionTicks!.get(1n), 30000);
+  tech.construction = 0;
+  assert.equal(f.world.read().productionTicks!.get(1n), 60000);
+  for (let i = 0; i < 10; i++) { f.world.read(); f.world.refreshQuotes(); f.world.quote(1n, 2n); }
+  assert.equal(f.queries.length, subscriptions);
+  assert.ok(f.world.diagnostics().quoteCalls >= 10);
+  await f.world.scan(defaults, () => true);
+  assert.equal(f.world.diagnostics().newSubscriptions, 0);
+  assert.ok(f.world.diagnostics().reusedSubscriptions > 0);
 });
 
 test('cancelled coverage extension releases only new subscriptions and retains the previously active set', async t => {
@@ -95,6 +202,20 @@ test('missing meteorite2 data blocks meteorite capture but not scans with that f
   assert.ok(f.queries.every(query => !query.includes('meteorite')));
   assert.equal(f.world.read().owned.length, 1);
   assert.equal(f.launchSwarm.mock.callCount(), 0);
+});
+
+test('native bulk upgrades preserve bigint ids and reject duplicate or oversized batches without fallback', async t => {
+  const f = setup(); t.after(() => f.world.dispose());
+  const calls: bigint[][] = [];
+  f.session.conn.reducers.upgradePlanetsBulk = async ({ planetIds }) => { calls.push(planetIds); };
+  const ids = [1n, 9007199254740993n];
+  await f.world.upgradeMany(ids);
+  assert.deepEqual(calls, [ids]);
+  assert.throws(() => f.world.upgradeMany([1n, 1n]), /不同星球/);
+  assert.throws(() => f.world.upgradeMany(Array.from({ length: 201 }, (_, i) => BigInt(i))), /200/);
+  delete f.session.conn.reducers.upgradePlanetsBulk;
+  assert.throws(() => f.world.upgradeMany(ids), /接口不可用/);
+  assert.equal(calls.length, 1);
 });
 
 test('special targets use separate native quotes, target fleet tables and reducers even when numeric ids collide', async t => {

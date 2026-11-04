@@ -1,3 +1,5 @@
+// Native client chunks upgrade_planets_bulk requests at 200 planets.
+export const maxUpgradeBatch = 200;
 export interface ExpansionSettings { scanMs: number; intervalMs: number; candidates: number; radius: number; horizonMs: number; maxTravelMs: number; reserve: number; maxSources: number;
   economicHorizonMs: number; cautiousExpansion: number; captureSuns: number; captureMeteorites: number; upgradeStable: number; stableMs: number }
 export const scanIntervals = [10000, 30000, 60000, 120000] as const;
@@ -13,10 +15,10 @@ export function validateSettings(s: ExpansionSettings): void {
   if (!Number.isSafeInteger(s.economicHorizonMs) || s.economicHorizonMs < 60000 || s.economicHorizonMs > 86400000
     || !Number.isSafeInteger(s.stableMs) || s.stableMs < 60000 || s.stableMs > 86400000) throw new Error('收益周期与稳定时间应为 60–86400 秒。');
 }
-export interface Contribution { sourceId: bigint; count: number; travelMs: number }
+export interface Contribution { sourceId: bigint; count: number; travelMs: number; lossPct?: number }
 export type TargetKind = 'planet' | 'sun' | 'comet';
-export interface Assignment extends Contribution { targetId: bigint; targetKind?: TargetKind; support?: Contribution[]; value?: number; kind?: 'reinforce' | 'sun-supply' | 'upgrade';
-  sunId?: bigint; hubBudget?: number; expectedLevel?: number; garrison?: number; expiresAt?: number; reason?: string }
+export interface Assignment extends Contribution { targetId: bigint; targetKind?: TargetKind; support?: Contribution[]; value?: number; kind?: 'reinforce' | 'sun-supply' | 'expansion-supply' | 'upgrade';
+  sunId?: bigint; hubBudget?: number; expectedLevel?: number; campaignKind?: 'planet' | 'sun'; campaignTargetId?: bigint; garrison?: number; expiresAt?: number; reason?: string; quoteRules?: string }
 export function targetKey(targetId: bigint, kind: TargetKind = 'planet'): string { return `${kind}:${targetId}`; }
 export function jobKey(job: Assignment): string { return targetKey(job.targetId, job.targetKind); }
 export function targetLabel(job: Pick<Assignment, 'targetId' | 'targetKind'>): string { return `${job.targetKind === 'sun' ? '恒星' : job.targetKind === 'comet' ? '陨石' : '星球'} #${job.targetId}`; }

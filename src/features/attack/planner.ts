@@ -62,7 +62,8 @@ export function* attackPlanSteps(world: ExpansionWorld, snapshot: WorldSnapshot,
     const feasible: Assignment[] = [];
     let evaluated = 0;
     for (const target of picked) {
-      if (evaluated++ % 8 === 0) yield;
+      yield;
+      evaluated++;
       candidates.add(target.planetId);
       const route = world.route?.(source.planetId, target.planetId);
       if (validRoute(route) && route.travelMs > config.settings.maxTravelMs) { diagnostics.tooSlow++; continue; }

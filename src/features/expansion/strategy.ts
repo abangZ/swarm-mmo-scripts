@@ -4,7 +4,7 @@ import { PlanetIndex } from '../../shared/planet-index';
 import { hostile } from '../commander/safety';
 import { inZone, type ModeConfig } from '../commander/types';
 import { bodyFleetsFor, bodyFor, fleetsFor, type WorldSnapshot } from './world';
-import { jobKey, targetLabel, type Assignment } from './types';
+import { maxUpgradeBatch, jobKey, targetLabel, type Assignment } from './types';
 import { finishPlanning } from '../../runtime/planning';
 
 /** A geographic pressure signal, not a prediction of an enemy launch or ETA. */
@@ -94,7 +94,7 @@ export class StableUpgrades {
       const cost = 100 * p.level! ** 2; // Undiscounted bound; never assume a technology discount.
       if (cost <= (budgets.get(p.planetId) ?? 0)) jobs.push({ sourceId: p.planetId, targetId: p.planetId, count: cost, travelMs: 0,
         kind: 'upgrade', expectedLevel: p.level, reason: `后方持续稳定 ${Math.floor(config.settings.stableMs / 60000)} 分钟，无附近无主目标；基础回本 ${cost} 分钟` });
-      if (jobs.length === 8) break;
+      if (jobs.length === maxUpgradeBatch) break;
     }
     return jobs;
   }
@@ -102,15 +102,22 @@ export class StableUpgrades {
 }
 
 export function validSpecialTarget(job: Assignment, snapshot: WorldSnapshot, config: ModeConfig): boolean {
+  return specialTargetSkipReason(job, snapshot, config) === undefined;
+}
+export function specialTargetSkipReason(job: Assignment, snapshot: WorldSnapshot, config: ModeConfig): string | undefined {
   const target = bodyFor(snapshot, job.targetId, job.targetKind);
-  if (!target || target.ownerId != null || !inZone(target, config.policy.zone) || bodyFleetsFor(snapshot, job.targetId, job.targetKind).length) return false;
-  if (job.garrison !== undefined && target.probeCount !== job.garrison) return false;
+  if (!target) return '目标已消失或不在当前情报中';
+  if (target.ownerId != null) return '目标已有人占领';
+  if (!inZone(target, config.policy.zone)) return '目标不在固定战区内';
+  if (bodyFleetsFor(snapshot, job.targetId, job.targetKind).length) return '目标已有其他舰队在途';
+  if (job.garrison !== undefined && target.probeCount !== job.garrison) return `目标驻军已变化：${job.garrison} → ${target.probeCount}，需重新报价`;
   if (job.targetKind === 'comet') {
     const comet = snapshot.meteorites?.find(p => p.meteoriteId === job.targetId);
     const expires = comet ? Number(comet.expiresAt.toMillis()) : NaN;
-    if (!Number.isFinite(expires) || expires <= Date.now() + job.travelMs + 5000) return false;
+    if (!Number.isFinite(expires)) return '目标到期时间不可用';
+    if (expires <= Date.now() + job.travelMs + 5000) return `剩余寿命 ${Math.max(0, Math.floor((expires - Date.now()) / 1000))} 秒，不足航行 ${Math.ceil(job.travelMs / 1000)} 秒及 5 秒余量`;
   }
-  return true;
+  return undefined;
 }
 
 export function decisionLabel(job: Assignment): string { return `${targetLabel(job)}：${job.reason ?? '增加占点数，同样占点数优先少舰队、短航程'}`; }

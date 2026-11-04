@@ -10,6 +10,10 @@ export type ExpansionActivity = 'idle' | 'starting' | 'scanning' | 'waiting' | '
 export interface ExpansionState {
   activity: ExpansionActivity; ownedCount: number; candidateCount: number; lastScanAt: number | null; nextScanAt: number | null;
   running: boolean; phase: string; queue: Assignment[]; flights: number; sent: number; captured: number; missed: number; exact: boolean;
+  diagnostics?: import('./world').WorldDiagnostics;
+  logistics?: import('./logistics').LogisticsState[];
+  meteorites?: import('./meteorite-frontier').MeteoriteReport[];
+  work?: { planningTiming?: import('../../runtime/planning').PlanningTiming; frontierTiming?: import('../../runtime/planning').PlanningTiming; logisticsMs?: number; logisticsRoutes?: number; logisticsReused?: number; scanning?: boolean; plan?: { startedAt: number; stage: string; completed?: number; total?: number }; frontier?: number; dispatch?: string; background?: number; inventory?: number };
   rally?: { hub: bigint; target: bigint; required: number; available: number; incoming: number; sources: number };
   rallies?: NonNullable<ExpansionState['rally']>[];
   attackDiagnostics?: AttackDiagnostics;

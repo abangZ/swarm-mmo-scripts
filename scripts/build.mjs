@@ -1,6 +1,5 @@
 import { build, context } from 'esbuild';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { planningWorkerPlugin } from './worker.mjs';
 const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const banner = `// ==UserScript==
 // @name         Swarm MMO 助手
@@ -33,7 +32,6 @@ const options = {
   minify: !watch,
   banner: { js: banner },
   legalComments: 'inline',
-  plugins: [planningWorkerPlugin],
 };
 if (watch) {
   const ctx = await context(options);

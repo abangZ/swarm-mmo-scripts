@@ -20,7 +20,8 @@ export interface Connection {
     planet: Table<Planet> & { planetId: { find(id: bigint): Planet | undefined } };
     clan_member2?: Table<{ playerId: Identity; clanId: bigint }>;
     player?: Table<{ identity: Identity; username: string }>;
-    player_tech?: Table<{ playerId: Identity }>;
+    player_tech?: Table<{ playerId: Identity; assault?: number; construction?: number }>;
+    galaxy?: Table<unknown>;
     sun2?: Table<Sun>; base?: Table<unknown>;
     meteorite2?: Table<Meteorite>; sun_swarm2?: Table<SunSwarm>;
     attack_automation?: Table<{ sourcePlanetId: bigint }>;
@@ -29,6 +30,7 @@ export interface Connection {
   reducers: { launchSwarmBulk?(args: { kind: number; targetId: bigint; launches: { sourceId: bigint; probeCount: number }[] }): Promise<void>; launchSwarm(args: { sourcePlanetId: bigint; targetPlanetId: bigint; probeCount: number }): Promise<void>;
     launchSwarmAtSun?(args: { sourcePlanetId: bigint; targetSunId: bigint; probeCount: number }): Promise<void>;
     launchSwarmAtMeteorite?(args: { sourcePlanetId: bigint; targetMeteoriteId: bigint; probeCount: number }): Promise<void>;
+    upgradePlanetsBulk?(args: { planetIds: bigint[] }): Promise<void>;
     upgradePlanet?(args: { planetId: bigint }): Promise<void> };
   subscriptionBuilder(): {
     onApplied(fn: () => void): ReturnType<Connection['subscriptionBuilder']>;

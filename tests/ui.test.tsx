@@ -7,8 +7,94 @@ import { AppController } from '../src/app/controller';
 import { defaults } from '../src/features/expansion/types';
 import { settle, fakeWorld } from './helpers/fixtures';
 import { appVersion } from '../src/app/version';
+import { createRoot } from 'react-dom/client';
+import { idleState } from '../src/features/commander/engine';
+import { RunStatus } from '../src/ui/RunStatus';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+test('meteorite diagnostics stay in an expandable section and preserve full bigint ids', async () => {
+  const host = document.createElement('div'), root = createRoot(host);
+  try {
+    await act(async () => root.render(<RunStatus state={{ ...idleState(), meteorites: [{ targetId: 9007199254740993n, reason: '可用兵力不足：需 300，可用 200' }] }} uncertain={false} />));
+    const details = [...host.querySelectorAll('details')].find(d => d.querySelector('summary')?.textContent?.includes('陨石快速检查'))!;
+    assert.equal(details.open, false);
+    assert.match(details.textContent!, /9007199254740993/); assert.match(details.textContent!, /需 300，可用 200/);
+  } finally { await act(async () => root.unmount()); }
+});
+test('setting help belongs to its heading and does not toggle the adjacent checkbox', async () => {
+  const ui = await panel();
+  await ui.click('toggle');
+  const heading = ui.element('intervalMs').previousElementSibling!;
+  const help = heading.querySelector('button')!;
+  assert.equal(heading.querySelector('[role="tooltip"]'), null);
+  await act(async () => help.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true })));
+  assert.match(heading.querySelector('[role="tooltip"]')!.textContent!, /1.0～1.4 秒/);
+  assert.equal(ui.element('reserve').previousElementSibling!.querySelector('[role="tooltip"]'), null);
+  await act(async () => help.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+  assert.equal(heading.querySelector('[role="tooltip"]'), null);
+  const checkbox = ui.element<HTMLInputElement>('upgradeStable');
+  const upgradeHelp = checkbox.closest('.setting-heading')!.querySelector('button')!;
+  const before = checkbox.checked;
+  await act(async () => { upgradeHelp.click(); upgradeHelp.click(); });
+  assert.equal(checkbox.checked, before);
+  const tooltip = checkbox.closest('.setting-heading')!.querySelector('[role="tooltip"]')!;
+  assert.match(tooltip.textContent!, /1→2/);
+  assert.equal(upgradeHelp.getAttribute('aria-describedby'), tooltip.id);
+  await act(async () => { upgradeHelp.focus(); upgradeHelp.blur(); });
+  assert.equal(checkbox.closest('.setting-heading')!.querySelector('[role="tooltip"]'), null);
+});
+
+test('live work shows planning stage and elapsed time instead of a stale upgrade event', async t => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: 100000 });
+  const host = document.createElement('div'); document.body.append(host);
+  const root = createRoot(host); onCleanup(() => act(async () => root.unmount()));
+  const state = { ...idleState(), running: true, activity: 'sent' as const, phase: '已确认升级星球 #7；同步库存',
+    work: { plan: { startedAt: 90000, stage: '筛选附近目标与合兵' }, background: 2 } };
+  await act(async () => root.render(<RunStatus state={state} uncertain={false} />));
+  assert.equal(host.querySelector('.status-badge')!.textContent, '规划中');
+  assert.equal(host.querySelector('#auto-status')!.textContent, '正在筛选附近目标与合兵');
+  assert.match(host.textContent!, /已耗时 10 秒/);
+  assert.match(host.textContent!, /后台回执 \/ 同步 2 项/);
+  assert.match(host.textContent!, /最近事件：已确认升级/);
+  assert.equal(host.querySelector('#next-scan')!.textContent, '本轮规划后计时');
+  await act(async () => t.mock.timers.tick(2000));
+  assert.match(host.textContent!, /已耗时 12 秒/);
+  await act(async () => root.render(<RunStatus state={{ ...state, running: false, activity: 'stopped', phase: '已停止' }} uncertain={false} />));
+  assert.equal(host.querySelector('#auto-status')!.textContent, '已停止');
+  assert.doesNotMatch(host.textContent!, /全局规划/);
+});
+
+test('short frontline checks keep the main status and row structure stable, while slow checks remain observable', async t => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: 100000 });
+  const host = document.createElement('div'); document.body.append(host);
+  const root = createRoot(host); onCleanup(() => act(async () => root.unmount()));
+  const state = { ...idleState(), running: true, activity: 'sent' as const,
+    work: { plan: { startedAt: 90000, stage: '筛选附近目标与合兵' } } };
+  const render = (frontier?: number) => act(async () => root.render(<RunStatus state={{ ...state, work: { ...state.work, frontier } }} uncertain={false} />));
+  await render();
+  const progress = host.querySelector('.expansion-progress')!;
+  const rows = [...progress.children];
+  const text = host.querySelector('#auto-status')!.textContent;
+  for (let i = 0; i < 3; i++) {
+    await render(Date.now());
+    assert.equal(host.querySelector('.status-badge')!.textContent, '规划中');
+    assert.equal(host.querySelector('#auto-status')!.textContent, text);
+    assert.equal(host.querySelector('.frontier-status')!.textContent, '前线监测：已开启');
+    await act(async () => t.mock.timers.tick(100));
+    await render();
+    assert.deepEqual([...progress.children], rows);
+  }
+  await render(Date.now());
+  await act(async () => t.mock.timers.tick(3000));
+  assert.match(host.querySelector('.frontier-status')!.textContent!, /正在检查 · [23] 秒/);
+  assert.deepEqual([...progress.children], rows);
+  await render();
+  assert.equal(host.querySelector('.frontier-status')!.textContent, '前线监测：已开启');
+  await act(async () => root.render(<RunStatus state={{ ...state, running: false, activity: 'stopped', phase: '已停止' }} uncertain={false} />));
+  assert.equal(host.querySelector('.frontier-status'), null);
+  assert.equal(host.querySelector('#auto-status')!.textContent, '已停止');
+});
+
 async function panel(controller?: AppController) {
   let dispose!: () => void;
   await act(async () => { dispose = mountPanel(controller); });
@@ -78,7 +164,10 @@ test('saved settings migrate into controlled fields and save seconds as millisec
   assert.equal(ui.element<HTMLInputElement>('maxSources').max, '10');
   assert.equal(ui.element<HTMLInputElement>('candidates').value, '7');
   assert.equal(ui.element<HTMLInputElement>('maxTravelMs').value, '1800');
-  assert.match(ui.root.textContent!, /规划队列窗口.*不限制航行时间/);
+  const windowHeading = ui.element('horizonMs').previousElementSibling!;
+  assert.match(windowHeading.textContent!, /规划队列窗口/);
+  await act(async () => windowHeading.querySelector('button')!.click());
+  assert.match(windowHeading.querySelector('[role="tooltip"]')!.textContent!, /不是扫描间隔或航行截止时间/);
   await ui.select('scanMs', '30');
   await act(async () => controller.setSetting('maxSources', '10'));
   assert.equal(ui.element<HTMLInputElement>('maxSources').value, '10');
@@ -151,7 +240,7 @@ test('running panel reports pending confirmation, scan timing, latest log while 
   assert.match(ui.element('activity-log').textContent!, /扫描完成/);
   assert.equal(ui.element('next-scan').textContent, '10 秒后');
   await ui.click('collapse');
-  assert.match(ui.element('toggle').textContent!, /运行中/);
+  assert.match(ui.element('toggle').textContent!, /后台确认中/);
   await act(async () => { acknowledge(); await settle(); });
   assert.match(ui.element('compact-log').textContent!, /已确认发射/);
   await act(async () => { t.mock.timers.tick(2000); await settle(); });
