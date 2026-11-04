@@ -129,3 +129,25 @@ test('a fast coalition draft shares donor budgets across targets and bounds nati
   for (const job of jobs) for (const m of members(job)) spent.set(m.sourceId, (spent.get(m.sourceId) ?? 0) + m.count);
   for (const [id, count] of spent) assert.ok(count <= f.snapshot.budgets.get(id)!);
 });
+
+test('a distant rich anchor compares faster sources near the target before locking a solo capture', t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 100000 });
+  for (const restricted of [false, true]) {
+    const f = fakeWorld(), planner = new FrontierPlanner();
+    f.target.positionX = 20; f.target.probeCount = 783;
+    const left = planet(3n, 19, 0, true), right = planet(4n, 21, 0, true);
+    f.snapshot.owned.push(left, right); f.snapshot.planets.push(left, right);
+    f.snapshot.budgets = new Map([[1n, 2000], [3n, 464], [4n, 396]]); f.snapshot.attackMultiplierUpperBound = 1;
+    f.world.launchGroup = async () => {};
+    f.world.quote = source => source === 1n ? { count: 785, travelMs: 300000 } : null;
+    const routes = t.mock.fn((source: bigint) => ({ travelMs: source === 1n ? 300000 : source === 3n ? 10000 : 11000, lossPct: restricted ? 50 : 0 }));
+    f.world.route = routes;
+    const config = { settings: defaults, policy: defaultPolicy };
+    const plan = () => finishPlanning(planner.steps(f.world, f.snapshot, config, f.snapshot.budgets, new Set(), true));
+    plan(); t.mock.timers.tick(2000);
+    const jobs = plan(); assert.equal(jobs.length, 1);
+    assert.deepEqual(members(jobs[0]).map(m => m.sourceId), restricted ? [1n] : [3n, 4n]);
+    assert.ok(routes.mock.callCount() <= 96);
+    if (!restricted) assert.equal(members(jobs[0]).reduce((n, m) => n + m.count, 0), 785);
+  }
+});

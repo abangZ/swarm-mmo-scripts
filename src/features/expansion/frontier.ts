@@ -67,13 +67,21 @@ export class FrontierPlanner {
           job = expansionQuote(world, snapshot, source, target, config);
           if (job && job.count > (available.get(id) ?? 0)) job = null;
         }
-        if (!job && grouped && !hasFleet && !snapshot.incoming.has(target.planetId) && groupTargets++ < 4) {
+        if (grouped && !hasFleet && !snapshot.incoming.has(target.planetId) && groupTargets++ < 4) {
           // At most 20 neighbors and four coalition targets per anchor; the
           // entire fast pass shares a 96-evaluation cap. No empire-wide search.
-          const close = bestCandidates(peers, 10, p => distance(p, target));
-          const pool = [...new Map([...close, ...strongest].map(p => [p.planetId, p])).values()].slice(0, 20);
-          const routes: GroupSource[] = [], options: Assignment[] = [];
-          for (const p of [source, ...pool]) {
+          // Compare around the destination, not only around the first (possibly
+          // distant) rich source. Nearby donors may form a much faster coalition
+          // without including that anchor at all.
+          const local = sourceIndex.near(target, config.settings.radius).filter(p => p.planetId !== id && (available.get(p.planetId) ?? 0) > 0);
+          const close = bestCandidates(local, 10, p => distance(p, target));
+          const powerful = bestCandidates(local, 10, p => -(available.get(p.planetId) ?? 0));
+          const pool = [...new Map([...close, ...powerful].map(p => [p.planetId, p])).values()];
+          const routes: GroupSource[] = [], options: Assignment[] = job ? [job] : [];
+          const alternativePower = powerful.slice(0, config.settings.maxSources).reduce((n, p) => n + power(available.get(p.planetId) ?? 0), 0);
+          // A coalition including an already feasible anchor cannot arrive
+          // sooner than that anchor. Avoid pricing hopeless alternatives.
+          for (const p of job && alternativePower <= target.probeCount ? [] : [source, ...pool]) {
             yield;
             const stock = available.get(p.planetId) ?? 0;
             if (!stock || distance(p, target) > config.settings.radius) continue;
@@ -81,9 +89,11 @@ export class FrontierPlanner {
             evaluations++;
             const route = world.route!(p.planetId, target.planetId);
             if (!validRoute(route) || route.travelMs > config.settings.maxTravelMs) continue;
+            // Equal/slower arrivals cannot improve an already viable solo.
+            if (job && !job.support?.length && route.travelMs >= job.travelMs) continue;
             routes.push({ planet: p, available: stock, ...route });
-            // Prefer an affordable single neighbor over splitting its army.
-            // route() and quote() share the native planning cache.
+            // Compare affordable singles and coalitions by their actual last
+            // arrival. route() and quote() share the native planning cache.
             if (p.planetId !== id && power(stock) > target.probeCount) {
               const solo = expansionQuote(world, snapshot, p, target, config);
               if (solo && solo.count <= stock) options.push(solo);
@@ -93,7 +103,7 @@ export class FrontierPlanner {
             yield;
             options.push(...coalitionOptions(target, group, { ...config.settings, horizonMs: config.settings.maxTravelMs }));
           }
-          job = options.sort((a, b) => members(a).length - members(b).length || completionMs(a) - completionMs(b) || totalCount(a) - totalCount(b))[0] ?? null;
+          job = options.sort((a, b) => completionMs(a) - completionMs(b) || members(a).length - members(b).length || totalCount(a) - totalCount(b))[0] ?? null;
         }
         if (!job) continue;
         jobs.push({ ...job, reason: job.support?.length ? '前线快速合兵：附近来源协同占领' : '前线快速补充：附近可占领目标' });
@@ -105,6 +115,6 @@ export class FrontierPlanner {
       // its jobs until three other potentially expensive sources finish.
       if (++evaluated >= 4 || jobs.length || evaluations >= 96) break;
     }
-    return jobs.sort((a, b) => a.travelMs - b.travelMs);
+    return jobs.sort((a, b) => completionMs(a) - completionMs(b));
   }
 }

@@ -8,10 +8,12 @@ export function schedule(jobs: Assignment[], interval: number, horizon: number):
 }
 function better(a: Assignment[], b: Assignment[], rapid = false): boolean {
   if (a.length !== b.length) return a.length > b.length;
+  const travel = (jobs: Assignment[]) => jobs.reduce((sum, j) => sum + completionMs(j), 0);
+  // One native coalition is one dispatch slot. For equal capture counts, its
+  // last arrival matters before fleet count; a distant solo is not inherently better.
+  if (rapid && travel(a) !== travel(b)) return travel(a) < travel(b);
   const fleets = (jobs: Assignment[]) => jobs.reduce((n, j) => n + members(j).length, 0);
   if (fleets(a) !== fleets(b)) return fleets(a) < fleets(b);
-  const travel = (jobs: Assignment[]) => jobs.reduce((sum, j) => sum + completionMs(j), 0);
-  if (rapid && travel(a) !== travel(b)) return travel(a) < travel(b);
   const value = (jobs: Assignment[]) => jobs.reduce((sum, j) => sum + (j.value ?? 0), 0);
   if (value(a) !== value(b)) return value(a) > value(b);
   const sum = (jobs: Assignment[], key: 'count' | 'travelMs') => jobs.reduce((total, j) => total + (key === 'count' ? totalCount(j) : completionMs(j)), 0);
@@ -47,13 +49,13 @@ export function* expansionPlanSteps(edges: Assignment[], budgets: Map<bigint, nu
     const reduced: Assignment[][] = [];
     for (const options of groups) {
       yield;
-      reduced.push(options.sort((a, b) => members(a).length - members(b).length || rank(b) - rank(a)).slice(0, 8));
+      reduced.push(options.sort((a, b) => (rapid ? completionMs(a) - completionMs(b) : 0) || members(a).length - members(b).length || rank(b) - rank(a)).slice(0, 8));
     }
     groups = reduced.sort((a, b) => rank(b[0]) - rank(a[0])).slice(0, 128);
   }
   for (const group of groups) {
     yield;
-    group.sort((a, b) => members(a).length - members(b).length || (rapid ? completionMs(a) - completionMs(b) : 0) || totalCount(a) - totalCount(b) || completionMs(a) - completionMs(b));
+    group.sort((a, b) => (rapid ? completionMs(a) - completionMs(b) : 0) || members(a).length - members(b).length || totalCount(a) - totalCount(b) || completionMs(a) - completionMs(b));
   }
   groups.sort((a, b) => a.length - b.length || completionMs(a[0]) - completionMs(b[0]));
   let best: Assignment[] = [];

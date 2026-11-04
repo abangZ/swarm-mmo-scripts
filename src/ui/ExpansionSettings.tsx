@@ -44,7 +44,7 @@ export function ExpansionSettings({ value, disabled, onChange, attack = false }:
     <SettingHeading htmlFor={id('maxTravelMs')} label="最长航行时间（秒）" help="默认 1800 秒（30 分钟），独立限制单次航程。近程先发，后方来源也可执行较远任务；搜索距离与固定战区仍生效。" />
     <input id={id('maxTravelMs')} type="number" min={10} max={14400} step={1} disabled={disabled} value={value.maxTravelMs} onChange={event => onChange('maxTravelMs', event.target.value)} />
     {!attack && <>
-      <SettingHeading htmlFor="maxSources" label={`直接合兵最多协同星球数（1–${maxCoalitionSources}）`} help="默认 3 颗，填 1 表示仅单星直攻。优先用更少来源完成占领，不为凑数量而拆兵。协同来源彼此距离不超过 8，抵达时差不超过 15 秒；一次批量派兵计一个操作。后方补给不受此数量限制，每批最多 50 颗。" />
+      <SettingHeading htmlFor="maxSources" label={`直接合兵最多协同星球数（1–${maxCoalitionSources}）`} help="默认 3 颗，填 1 表示仅单星直攻。同样占点数优先更早抵达，时间相同时优先更少来源，不为凑数量而拆兵。协同来源彼此距离不超过 8，抵达时差不超过 15 秒；一次批量派兵计一个操作。后方补给不受此数量限制，每批最多 50 颗。" />
       <input id="maxSources" type="number" min={1} max={maxCoalitionSources} step={1} disabled={disabled} value={value.maxSources} onChange={event => onChange('maxSources', event.target.value)} />
       <SettingHeading htmlFor="cautiousExpansion" label="扩张取向" help="默认持续派兵，不等待整波落地。两种取向均保留守军和已知来袭预算；风险按已观测邻敌与支援距离判断。" />
       <select id="cautiousExpansion" disabled={disabled} value={value.cautiousExpansion} onChange={event => onChange('cautiousExpansion', event.target.value)}>

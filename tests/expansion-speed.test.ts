@@ -1,7 +1,7 @@
 import './helpers/browser';
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { defaults } from '../src/features/expansion/types';
+import { completionMs, defaults, members, type Assignment } from '../src/features/expansion/types';
 import { ExpansionEngine } from '../src/features/expansion/engine';
 import { expansionProposals, expansionQuote } from '../src/features/expansion/proposals';
 import { planExpansion } from '../src/features/expansion/planner';
@@ -41,6 +41,25 @@ test('rapid expansion sends short trips first and prefers earlier capture over a
   const alternative = { ...short, sourceId: 2n, count: 1, travelMs: 90000, value: 100 };
   assert.equal(planExpansion([alternative, short], budgets, 1500, 120000, 1800000).jobs[0].sourceId, 1n);
   assert.equal(planExpansion([long], budgets, 1500, 120000, 180000).jobs.length, 0, 'the separate journey cap still applies');
+});
+
+test('equal capture counts prefer a nearby coalition over a distant solo in exact and pruned planning', () => {
+  const group: Assignment = { sourceId: 1n, targetId: 10n, count: 464, travelMs: 10000, support: [{ sourceId: 2n, count: 321, travelMs: 11000 }] };
+  const solo: Assignment = { sourceId: 3n, targetId: 10n, count: 785, travelMs: 300000 };
+  const budgets = new Map([[1n, 464], [2n, 396], [3n, 2000]]);
+  for (const large of [false, true]) {
+    // More than eight slower solos also exercise the per-target pruning cap.
+    const edges = large ? [...Array.from({ length: 1001 }, () => ({ ...solo })), group] : [solo, group];
+    const plan = planExpansion(edges, budgets, 1500, 120000, defaults.maxTravelMs);
+    assert.equal(plan.exact, !large); assert.equal(plan.jobs.length, 1);
+    assert.equal(completionMs(plan.jobs[0]), 11000); assert.equal(members(plan.jobs[0]).length, 2);
+  }
+  const equalSolo = { ...solo, travelMs: 11000 };
+  assert.equal(members(planExpansion([group, equalSolo], budgets, 1500, 120000, defaults.maxTravelMs).jobs[0]).length, 1, 'equal arrival still prefers fewer fleets');
+  const lateSupport = { ...group, support: [{ ...group.support![0], travelMs: 310000 }] };
+  assert.equal(planExpansion([lateSupport, solo], budgets, 1500, 120000, defaults.maxTravelMs).jobs[0].sourceId, 3n, 'the last supporting fleet determines occupation time');
+  const second = { sourceId: 1n, targetId: 11n, count: 464, travelMs: 1000 };
+  assert.equal(planExpansion([group, solo, second], budgets, 1500, 120000, defaults.maxTravelMs).jobs.length, 2, 'speed must not reduce the number of achievable captures');
 });
 
 test('candidate slots are backfilled after unaffordable neighbors, and diagnostics explain the actual journey cap', () => {

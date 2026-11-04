@@ -120,4 +120,4 @@ export function specialTargetSkipReason(job: Assignment, snapshot: WorldSnapshot
   return undefined;
 }
 
-export function decisionLabel(job: Assignment): string { return `${targetLabel(job)}：${job.reason ?? '增加占点数，同样占点数优先少舰队、短航程'}`; }
+export function decisionLabel(job: Assignment): string { return `${targetLabel(job)}：${job.reason ?? '增加占点数，同样占点数优先更早抵达，再减少舰队'}`; }

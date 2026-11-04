@@ -311,6 +311,34 @@ test('frontier coalitions dispatch through one native batch while the full draft
   assert.equal(batch.mock.callCount(), 1, 'in-flight target cannot be submitted twice');
 });
 
+test('nearby coalition wins before a remote solo locks the target while global planning is unfinished', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  let release!: () => void;
+  delayProposals((round, signal) => { if (round === 1) return paused(signal, resume => { release = resume; }); });
+  const f = fakeWorld(); f.target.positionX = 20; f.target.probeCount = 783;
+  const left = planet(3n, 19, 0, true), right = planet(4n, 21, 0, true);
+  f.snapshot.owned.push(left, right); f.snapshot.planets.push(left, right);
+  f.snapshot.budgets = new Map([[1n, 1000], [3n, 464], [4n, 396]]); f.snapshot.attackMultiplierUpperBound = 1;
+  f.world.quote = source => source === 1n ? { count: 785, travelMs: 300000 } : null;
+  f.world.route = source => ({ travelMs: source === 1n ? 300000 : 10000, lossPct: 0 });
+  f.world.launchGroup = mock.fn(async job => {
+    for (const m of members(job)) f.snapshot.budgets.set(m.sourceId, f.snapshot.budgets.get(m.sourceId)! - m.count);
+  });
+  f.world.syncInventory = async () => {};
+  const commander = new Commander(() => {}, () => f.world);
+  const run = commander.start('expansion', { ...config, settings: { ...config.settings, maxSources: 3 } });
+  t.after(async () => { commander.stop(); t.mock.timers.tick(0); await run; });
+  await settle(); assert.ok(release);
+  f.snapshot.budgets.set(1n, 2000); t.mock.timers.tick(1000); await settle();
+  const groups = (f.world.launchGroup as any).mock.calls;
+  assert.equal(groups.length, 1);
+  assert.deepEqual(members(groups[0].arguments[0]).map(m => m.sourceId), [3n, 4n]);
+  assert.ok(commander.states.expansion.work?.plan);
+  release(); await settle(); t.mock.timers.tick(1500); await settle();
+  assert.equal((f.world.launch as any).mock.callCount(), 0, 'the late global solo must not be sent to the already locked target');
+  assert.equal((f.world.launchGroup as any).mock.callCount(), 1);
+});
+
 test('frontier coalition publication rechecks every supporting source against live stock', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
   delayProposals((_, signal) => paused(signal, () => {}));
