@@ -1,6 +1,6 @@
 # 架构与开发约定
 
-当前 v0.15.2，React 19、TypeScript、esbuild、pnpm。发布物为包含 React、React DOM、业务代码与 Shadow DOM 样式的单个 IIFE 油猴脚本。
+React 19、TypeScript、esbuild、pnpm。发布物为包含 React、React DOM、业务代码与 Shadow DOM 样式的单个 IIFE 油猴脚本。
 
 历史功能与验证记录见 [history.md](history.md)，代码协作约束见 [AGENTS.md](../AGENTS.md)。
 
@@ -21,6 +21,14 @@ pnpm dev  # 监听源码并重新构建
 Chrome / Edge 本地开发可安装构建时生成的 `dist/swarm-mmo-local.user.js`：在扩展管理中为 Tampermonkey 开启「允许访问文件网址」，将加载器完整内容粘贴为新脚本，并停用正式版以免重复加载。运行 `pnpm dev` 后，保存源码并刷新游戏即可加载更新；这不是页面热更新，刷新后仍需手动启动任务。
 
 加载器的 `@require file:///...` 包含当前工程绝对路径，只供本机使用，不作为发布物上传。移动工程或修改匹配网址、权限后需重新构建并安装加载器。文件访问失败时检查路径、文件访问和扩展站点权限，参见 [Tampermonkey 本地编辑说明](https://www.tampermonkey.net/faq.php?q=Q402)。
+
+## GitHub 发布
+
+仓库为 https://github.com/abangZ/swarm-mmo-scripts，作者、主页与问题反馈地址统一配置在 `package.json`，由 `scripts/build.mjs` 写入油猴元数据。版本同样取自 `package.json`。
+
+正式安装地址指向 `main` 分支的 `dist/swarm-mmo.user.js`，更新检查指向同目录的 `swarm-mmo.meta.js`。两者均由构建生成并纳入版本控制；发布时更新版本、运行 typecheck / test / build，再将源码和这两个生成文件一起提交，在获得推送授权后推送。不要提交 `pnpm dev` 生成的开发包。
+
+本地加载器仍被忽略，`@downloadURL` 与 `@updateURL` 均为 `none`，防止油猴用远程正式包覆盖本地加载器。已有加载器需要重新安装一次才能获得该配置。
 
 ## 职责划分
 

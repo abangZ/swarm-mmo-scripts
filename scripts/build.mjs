@@ -1,9 +1,16 @@
 import { build, context } from 'esbuild';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+const { version, author, homepage, bugs } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+const downloadURL = 'https://raw.githubusercontent.com/abangZ/swarm-mmo-scripts/main/dist/swarm-mmo.user.js';
+const updateURL = 'https://raw.githubusercontent.com/abangZ/swarm-mmo-scripts/main/dist/swarm-mmo.meta.js';
 const banner = `// ==UserScript==
 // @name         Swarm MMO 助手
-// @namespace    swarm-mmo-scripts
+// @namespace    ${homepage}
+// @author       ${author}
+// @homepageURL  ${homepage}
+// @supportURL   ${bugs.url}
+// @downloadURL  ${downloadURL}
+// @updateURL    ${updateURL}
 // @version      ${version}
 // @description  分区自动扩张与集结进攻，共享兵力预算、独立派兵队列与运行日志
 // @match        https://www.swarm-mmo.com/play*
@@ -15,9 +22,12 @@ const banner = `// ==UserScript==
 // Generated locally: the absolute file URL follows this checkout, including escaped spaces.
 const localBundle = new URL('../dist/swarm-mmo.user.js', import.meta.url);
 const loader = banner
+  .replace(`// @downloadURL  ${downloadURL}`, '// @downloadURL  none')
+  .replace(`// @updateURL    ${updateURL}`, '// @updateURL    none')
   .replace('// @name         Swarm MMO 助手', '// @name         Swarm MMO 助手（本地开发）')
   .replace('// ==/UserScript==', `// @require      ${localBundle.href}\n// ==/UserScript==`);
 await mkdir(new URL('../dist/', import.meta.url), { recursive: true });
+await writeFile(new URL('../dist/swarm-mmo.meta.js', import.meta.url), `${banner}\n`);
 await writeFile(new URL('../dist/swarm-mmo-local.user.js', import.meta.url), `${loader}\n\n// 功能代码由上面的本地 @require 加载。修改源码并构建后，刷新游戏页面即可。\n`);
 const watch = process.argv.includes('--watch');
 const options = {

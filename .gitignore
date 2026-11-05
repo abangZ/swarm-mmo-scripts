@@ -1,5 +1,7 @@
 node_modules/
-dist/
+dist/*
+!dist/swarm-mmo.user.js
+!dist/swarm-mmo.meta.js
 .idea/
 *.local
 .test-*/

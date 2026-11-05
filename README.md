@@ -14,8 +14,10 @@
 ## 安装
 
 1. 在浏览器中安装 [Tampermonkey](https://www.tampermonkey.net/)。
-2. 下载本仓库源码，按[开发说明](docs/architecture.md#开发与构建)构建，将 `dist/swarm-mmo.user.js` 的完整内容粘贴到 Tampermonkey 新建脚本中并保存。
+2. 点击[安装 Swarm MMO 助手](https://raw.githubusercontent.com/abangZ/swarm-mmo-scripts/main/dist/swarm-mmo.user.js)，在 Tampermonkey 中确认安装。若浏览器只显示代码，可将完整内容粘贴到 Tampermonkey 新建脚本中并保存。
 3. 打开或刷新游戏页面，左下角出现「Swarm MMO 助手」即安装成功。
+
+后续可通过 Tampermonkey 检查更新。
 
 ## 使用
 

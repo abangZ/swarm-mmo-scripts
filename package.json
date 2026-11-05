@@ -1,6 +1,6 @@
 {
   "name": "swarm-mmo-scripts",
-  "version": "0.15.6",
+  "version": "0.15.7",
   "private": true,
   "type": "module",
   "scripts": {
@@ -30,5 +30,14 @@
   "dependencies": {
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
+  },
+  "author": "abangZ",
+  "homepage": "https://github.com/abangZ/swarm-mmo-scripts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/abangZ/swarm-mmo-scripts.git"
+  },
+  "bugs": {
+    "url": "https://github.com/abangZ/swarm-mmo-scripts/issues"
   }
 }
