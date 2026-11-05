@@ -2,7 +2,7 @@
 
 React 19、TypeScript、esbuild、pnpm。发布物为包含 React、React DOM、业务代码与 Shadow DOM 样式的单个 IIFE 油猴脚本。
 
-历史功能与验证记录见 [history.md](history.md)，代码协作约束见 [AGENTS.md](../AGENTS.md)。
+历史功能与验证记录见 [history.md](history.md)，策略设想见 [strategy-research.md](strategy-research.md)，代码协作约束见 [AGENTS.md](../AGENTS.md)。
 
 ## 开发与构建
 
@@ -24,7 +24,7 @@ Chrome / Edge 本地开发可安装构建时生成的 `dist/swarm-mmo-local.user
 
 ## GitHub 发布
 
-仓库为 https://github.com/abangZ/swarm-mmo-scripts，作者、主页与问题反馈地址统一配置在 `package.json`，由 `scripts/build.mjs` 写入油猴元数据。版本同样取自 `package.json`。
+仓库为 https://github.com/abangZ/swarm-mmo-scripts，作者、主页与问题反馈地址统一配置在 `package.json`，由 `scripts/build.mjs` 写入油猴元数据。版本与 `GPL-3.0-only` 许可证标识同样取自 `package.json`。正式包包含版权、许可证与对应源码入口，第三方许可单独保存在根目录 `THIRD_PARTY_NOTICES.md`。
 
 正式安装地址指向 `main` 分支的 `dist/swarm-mmo.user.js`，更新检查指向同目录的 `swarm-mmo.meta.js`。两者均由构建生成并纳入版本控制；发布时更新版本、运行 typecheck / test / build，再将源码和这两个生成文件一起提交，在获得推送授权后推送。不要提交 `pnpm dev` 生成的开发包。
 

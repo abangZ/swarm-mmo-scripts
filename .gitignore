@@ -5,3 +5,7 @@ dist/*
 .idea/
 *.local
 .test-*/
+
+# Local remote desktop notes
+/docs/remote-desktop.md
+/server.md

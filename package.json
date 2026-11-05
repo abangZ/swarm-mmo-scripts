@@ -1,6 +1,6 @@
 {
   "name": "swarm-mmo-scripts",
-  "version": "0.15.7",
+  "version": "0.15.8",
   "private": true,
   "type": "module",
   "scripts": {
@@ -39,5 +39,6 @@
   },
   "bugs": {
     "url": "https://github.com/abangZ/swarm-mmo-scripts/issues"
-  }
+  },
+  "license": "GPL-3.0-only"
 }

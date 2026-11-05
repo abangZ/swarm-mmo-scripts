@@ -1,12 +1,13 @@
 import { build, context } from 'esbuild';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-const { version, author, homepage, bugs } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+const { version, author, homepage, bugs, license } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const downloadURL = 'https://raw.githubusercontent.com/abangZ/swarm-mmo-scripts/main/dist/swarm-mmo.user.js';
 const updateURL = 'https://raw.githubusercontent.com/abangZ/swarm-mmo-scripts/main/dist/swarm-mmo.meta.js';
 const banner = `// ==UserScript==
 // @name         Swarm MMO 助手
 // @namespace    ${homepage}
 // @author       ${author}
+// @license      ${license}
 // @homepageURL  ${homepage}
 // @supportURL   ${bugs.url}
 // @downloadURL  ${downloadURL}
@@ -40,7 +41,7 @@ const options = {
   loader: { '.css': 'text' },
   define: { 'process.env.NODE_ENV': JSON.stringify(watch ? 'development' : 'production') },
   minify: !watch,
-  banner: { js: banner },
+  banner: { js: `${banner}\n// Copyright (C) 2026 ${author}\n// SPDX-License-Identifier: ${license}\n// License: ${homepage}/blob/main/LICENSE\n// Corresponding source: ${homepage}\n// Third-party notices: ${homepage}/blob/main/THIRD_PARTY_NOTICES.md` },
   legalComments: 'inline',
 };
 if (watch) {

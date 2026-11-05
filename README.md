@@ -32,3 +32,9 @@
 遇到问题请在 [Issues](https://github.com/abangZ/swarm-mmo-scripts/issues) 中附上脚本版本、相关设置和日志。
 
 作者：[abangZ](https://github.com/abangZ)。构建与本地开发方式见[开发文档](docs/architecture.md)。
+
+## 开源协议
+
+Copyright (C) 2026 abangZ。本项目采用 [GNU GPL v3.0](LICENSE)（`GPL-3.0-only`）。分发本项目或修改版时，须按 GPL 提供对应源码并保留许可声明；仅私人修改自用不要求公开源码。软件不提供担保，完整条款以 LICENSE 为准。
+
+打包的第三方依赖保留各自许可证，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
