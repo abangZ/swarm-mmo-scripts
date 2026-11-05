@@ -2,6 +2,26 @@
 
 当前 v0.15.2，React 19、TypeScript、esbuild、pnpm。发布物为包含 React、React DOM、业务代码与 Shadow DOM 样式的单个 IIFE 油猴脚本。
 
+历史功能与验证记录见 [history.md](history.md)，代码协作约束见 [AGENTS.md](../AGENTS.md)。
+
+## 开发与构建
+
+需要 Node.js 22+ 和 package.json 指定的 pnpm（当前为 10.34.5）。
+
+```sh
+pnpm install --frozen-lockfile
+pnpm typecheck
+pnpm test
+pnpm build
+pnpm dev  # 监听源码并重新构建
+```
+
+正式构建输出 `dist/swarm-mmo.user.js`，包含全部依赖，不依赖外部 CDN。脚本使用页面上下文（`@grant none`、`@sandbox raw`）。
+
+Chrome / Edge 本地开发可安装构建时生成的 `dist/swarm-mmo-local.user.js`：在扩展管理中为 Tampermonkey 开启「允许访问文件网址」，将加载器完整内容粘贴为新脚本，并停用正式版以免重复加载。运行 `pnpm dev` 后，保存源码并刷新游戏即可加载更新；这不是页面热更新，刷新后仍需手动启动任务。
+
+加载器的 `@require file:///...` 包含当前工程绝对路径，只供本机使用，不作为发布物上传。移动工程或修改匹配网址、权限后需重新构建并安装加载器。文件访问失败时检查路径、文件访问和扩展站点权限，参见 [Tampermonkey 本地编辑说明](https://www.tampermonkey.net/faq.php?q=Q402)。
+
 ## 职责划分
 
 | 目录 / 文件 | 职责 |
