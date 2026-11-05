@@ -77,7 +77,7 @@ export class StableUpgrades {
       || this.attempted.get(p.planetId) === p.level || Date.now() - (this.safeSince.get(p.planetId) ?? Infinity) < config.settings.stableMs) return false;
     const near = (target: Pick<Planet, 'positionX' | 'positionY'>) => inZone(target, config.policy.zone) && distance(p, target) <= config.settings.radius;
     // Even unaffordable neutral points keep a source in the expansion economy.
-    if (snapshot.planets.some(t => t.ownerId == null && near(t))) return false;
+    if (!config.settings.peacefulDevelopment && snapshot.planets.some(t => t.ownerId == null && near(t))) return false;
     if (config.settings.captureSuns && snapshot.suns?.some(t => t.ownerId == null && near(t))) return false;
     if (config.settings.captureMeteorites && snapshot.meteorites?.some(t => t.ownerId == null && near(t) && Number(t.expiresAt.toMillis()) > Date.now() + 5000)) return false;
     return 100 * p.level! ** 2 * 60000 <= config.settings.economicHorizonMs;

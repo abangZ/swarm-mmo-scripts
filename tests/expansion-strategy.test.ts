@@ -30,7 +30,7 @@ const meteorite = (id = 2n, expires = Date.now() + 3600000): Meteorite => ({ met
 test('old settings preserve expansion speed and migrate independent economy, special targets and stable upgrades', () => {
   localStorage.setItem('swarm-helper-expansion-settings', JSON.stringify({ scanMs: 30000, intervalMs: 1200, candidates: 8, radius: 64, horizonMs: 120000, maxTravelMs: 1800000, reserve: 0, maxSources: 10 }));
   const settings = parseSettings(loadSettings());
-  assert.equal(settings.intervalMs, 1200); assert.equal(settings.radius, 64); assert.equal(settings.cautiousExpansion, 0);
+  assert.equal(settings.peacefulDevelopment, 0); assert.equal(settings.intervalMs, 1200); assert.equal(settings.radius, 64); assert.equal(settings.cautiousExpansion, 0);
   assert.equal(settings.captureSuns, 1); assert.equal(settings.captureMeteorites, 1); assert.equal(settings.upgradeStable, 1);
   assert.equal(settings.economicHorizonMs, 10800000); assert.equal(settings.stableMs, 600000);
 });
@@ -338,4 +338,55 @@ test('commander completes a fragment-to-sun campaign while continuing ordinary e
   assert.equal((f.world.launchBody as any).mock.callCount(), 1);
   assert.equal((f.world.launchBody as any).mock.calls[0].arguments[0].count, 100);
   commander.stop(); await run;
+});
+
+
+test('peaceful development waits for new meteorites, ignores planets and suns, and restores expansion after restart', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  t.mock.method(Math, 'random', () => 0.5);
+  const f = specialWorld(), cfg = config();
+  cfg.settings.peacefulDevelopment = 1;
+  cfg.settings.captureMeteorites = 0; // A saved expansion preference must not disable this mode.
+  cfg.settings.upgradeStable = 0;
+  f.snapshot.suns = [sun()]; f.snapshot.budgets.set(1n, 500);
+  f.world.quoteBody = (_source, _target, kind) => ({ count: kind === 'sun' ? 100 : 3, travelMs: 1000 });
+  f.world.syncInventory = async () => {};
+  const commander = new Commander(() => {}, () => f.world);
+  let run = commander.start('expansion', cfg);
+  try {
+    await settle();
+    for (let i = 0; i < 4; i++) { t.mock.timers.tick(1000); await settle(); }
+    assert.equal(commander.states.expansion.running, true);
+    assert.equal(commander.states.expansion.queue.length, 0);
+    assert.equal((f.world.launch as any).mock.callCount(), 0);
+    assert.equal((f.world.launchBody as any).mock.callCount(), 0);
+    f.snapshot.meteorites = [meteorite()];
+    for (let i = 0; i < 8; i++) { t.mock.timers.tick(1000); await settle(); }
+    const calls = (f.world.launchBody as any).mock.calls;
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].arguments[0].targetKind, 'comet');
+    assert.equal((f.world.launch as any).mock.callCount(), 0);
+    assert.equal((f.world.launchGroup as any).mock.callCount(), 0);
+    assert.equal(cfg.settings.captureMeteorites, 0, 'runtime overrides preserve saved settings');
+    commander.stop(); await run;
+    f.snapshot.meteorites = [];
+    run = commander.start('expansion', config()); await settle();
+    for (let i = 0; i < 5; i++) { t.mock.timers.tick(1000); await settle(); }
+    assert.ok((f.world.launchBody as any).mock.calls.some((call: any) => call.arguments[0].targetKind === 'sun'));
+    assert.ok((f.world.launch as any).mock.callCount() > 0);
+  } finally { commander.stop(); await run; }
+});
+
+test('peaceful upgrades ignore excluded planets but reserve nearby meteorite opportunities', t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 100000 });
+  const f = specialWorld(), cfg = config(), upgrades = new StableUpgrades();
+  cfg.settings.peacefulDevelopment = 1; cfg.settings.captureSuns = 0;
+  f.snapshot.budgets.set(1n, 500);
+  assert.equal(expansionProposals(f.world, f.snapshot, cfg, f.snapshot.budgets, new Set()).edges.length, 0);
+  upgrades.observe(f.snapshot, cfg); t.mock.timers.tick(cfg.settings.stableMs);
+  assert.equal(upgrades.plans(f.snapshot, cfg, f.snapshot.budgets, new Set()).length, 1);
+  f.snapshot.meteorites = [meteorite()];
+  assert.equal(upgrades.plans(f.snapshot, cfg, f.snapshot.budgets, new Set()).length, 0);
+  f.snapshot.meteorites = []; cfg.settings.upgradeStable = 0;
+  assert.equal(upgrades.plans(f.snapshot, cfg, f.snapshot.budgets, new Set()).length, 0);
 });

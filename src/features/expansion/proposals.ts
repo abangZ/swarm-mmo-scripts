@@ -41,6 +41,18 @@ export function expansionProposals(world: ExpansionWorld, snapshot: WorldSnapsho
 }
 export function* expansionProposalSteps(world: ExpansionWorld, snapshot: WorldSnapshot, config: ModeConfig, budgets: Map<bigint, number>, locked: Set<bigint>, progress?: (completed: number, total: number) => void, search?: CandidateSearch): Generator<void, ExpansionProposals> {
   const { settings } = config;
+  if (settings.peacefulDevelopment) {
+    const sources: SourceReport[] = [];
+    for (const p of snapshot.owned) {
+      yield;
+      if (!inZone(p, config.policy.zone)) continue;
+      const available = budgets.get(p.planetId) ?? 0;
+      sources.push({ sourceId: p.planetId, x: p.positionX, y: p.positionY, available,
+        reason: available > 0 ? '安稳发育：保留余兵等待无主陨石' : '兵力已用于防守或其他任务' });
+    }
+    progress?.(sources.length, sources.length);
+    return { edges: [], candidates: 0, sources, readySources: sources.filter(p => p.available > 0).length };
+  }
   const neutrals = snapshot.planets.filter(p => p.ownerId == null && inZone(p, config.policy.zone));
   const risk = riskEvaluator(snapshot, config);
   const exposed = new Set<bigint>();

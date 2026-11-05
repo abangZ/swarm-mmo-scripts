@@ -355,3 +355,34 @@ test('hub selection preserves bigint identity and never moves the fixed war zone
   assert.deepEqual({ x: controller.getSnapshot().policies.attack.x, y: controller.getSnapshot().policies.attack.y }, zone);
   assert.equal((f.world.launch as any).mock.callCount(), 0);
 });
+
+
+test('peaceful mode preserves expansion preferences, starts only manually and persists across remount', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: 100000 });
+  const f = fakeWorld(), controller = new AppController(() => f.world), ui = await panel(controller);
+  await ui.click('toggle');
+  await ui.click('captureMeteorites');
+  await ui.select('peacefulDevelopment', '1');
+  assert.equal(controller.state.expansion.running, false);
+  assert.match(ui.element('start').textContent!, /开始安稳发育/);
+  assert.equal(ui.element<HTMLInputElement>('captureSuns').checked, false);
+  assert.equal(ui.element<HTMLInputElement>('captureMeteorites').checked, true);
+  assert.equal(ui.element<HTMLInputElement>('captureMeteorites').disabled, true);
+  assert.equal(ui.element<HTMLInputElement>('upgradeStable').disabled, false);
+  await ui.select('peacefulDevelopment', '0');
+  assert.equal(ui.element<HTMLInputElement>('captureSuns').checked, true);
+  assert.equal(ui.element<HTMLInputElement>('captureMeteorites').checked, false);
+  await ui.select('peacefulDevelopment', '1');
+  await ui.click('start'); await ui.click('start');
+  assert.equal(ui.element<HTMLSelectElement>('peacefulDevelopment').disabled, true);
+  assert.match(ui.element('expansion').textContent!, /陨石监测/);
+  assert.doesNotMatch(ui.element('expansion').textContent!, /前线监测/);
+  const saved = JSON.parse(localStorage.getItem('swarm-helper-expansion-settings')!);
+  assert.equal(saved.peacefulDevelopment, 1); assert.equal(saved.captureMeteorites, 0);
+  assert.equal((f.world.launch as any).mock.callCount(), 0);
+  await act(async () => { ui.dispose(); t.mock.timers.tick(500); await settle(); });
+  const restored = new AppController(() => fakeWorld().world);
+  assert.equal(restored.state.settings.peacefulDevelopment, '1');
+  assert.equal(restored.state.expansion.running, false);
+  restored.dispose();
+});

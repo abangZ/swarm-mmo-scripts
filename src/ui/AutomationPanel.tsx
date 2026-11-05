@@ -24,7 +24,8 @@ interface Props {
 }
 export function AutomationPanel({ mode, region, summary, state, settings, logs, uncertain, settingsOpen, onToggleSettings, onSettingChange, onStart, onStop }: Props) {
   const attack = mode === 'attack';
-  const label = attack ? '进攻' : '扩张';
+  const peaceful = !attack && settings.peacefulDevelopment === '1';
+  const label = attack ? '进攻' : peaceful ? '安稳发育' : '扩张';
   const prefix = attack ? 'attack-' : '';
   const settingsId = `${mode}-settings`;
   return <>
@@ -41,10 +42,10 @@ export function AutomationPanel({ mode, region, summary, state, settings, logs, 
         {state.running && <p className="notice">运行中可查看设置，停止后可修改。</p>}
         {region}
         <ExpansionSettings attack={attack} value={settings} disabled={state.running} onChange={onSettingChange} />
-        <p>{attack ? '附近兵力可直接进攻，远处余兵按需向中转星集结，两类任务交替执行。出击时重新报价，保留 1 个安全余量、产兵余量和设定的占领守军。' : '单星保留报价 +1 下限，并确保损耗后的余量；无主星合兵抵达兵力至少为驻军 +2。同样占点数优先更早完成占领，时间相同再优先少用舰队。'}</p>
+        <p>{attack ? '附近兵力可直接进攻，远处余兵按需向中转星集结，两类任务交替执行。出击时重新报价，保留 1 个安全余量、产兵余量和设定的占领守军。' : peaceful ? '持续扫描无主陨石，核对排队时间、航程和消失时间后派兵；保留防守预算，可选连续稳定后的单级升级。陨石持有至到期才获得奖励，驻军随之消失。' : '单星保留报价 +1 下限，并确保损耗后的余量；无主星合兵抵达兵力至少为驻军 +2。同样占点数优先更早完成占领，时间相同再优先少用舰队。'}</p>
       </div>
     </div>
-    <RunStatus prefix={prefix} state={state} uncertain={uncertain} />
+    <RunStatus peaceful={peaceful} prefix={prefix} state={state} uncertain={uncertain} />
     <dl id={`${prefix}auto-counts`} className="run-stats">
       <div><dd>{state.sent}</dd><dt>已发舰队</dt></div>
       <div className="success"><dd>{state.captured}</dd><dt>已占领</dt></div>

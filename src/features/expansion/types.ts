@@ -1,17 +1,17 @@
 // Native client chunks upgrade_planets_bulk requests at 200 planets.
 export const maxUpgradeBatch = 200;
 export interface ExpansionSettings { scanMs: number; intervalMs: number; candidates: number; radius: number; horizonMs: number; maxTravelMs: number; reserve: number; maxSources: number;
-  economicHorizonMs: number; cautiousExpansion: number; captureSuns: number; captureMeteorites: number; upgradeStable: number; stableMs: number }
+  peacefulDevelopment: number; economicHorizonMs: number; cautiousExpansion: number; captureSuns: number; captureMeteorites: number; upgradeStable: number; stableMs: number }
 export const scanIntervals = [10000, 30000, 60000, 120000] as const;
 export const captureMargin = 1;
 export const maxCoalitionSources = 10;
 export const defaults: ExpansionSettings = { scanMs: 10000, intervalMs: 1500, candidates: 10, radius: 32, horizonMs: 120000, maxTravelMs: 1800000, reserve: 0, maxSources: 3,
-  economicHorizonMs: 10800000, cautiousExpansion: 0, captureSuns: 1, captureMeteorites: 1, upgradeStable: 1, stableMs: 600000 };
+  peacefulDevelopment: 0, economicHorizonMs: 10800000, cautiousExpansion: 0, captureSuns: 1, captureMeteorites: 1, upgradeStable: 1, stableMs: 600000 };
 export function validateSettings(s: ExpansionSettings): void {
   if (!scanIntervals.some(interval => interval === s.scanMs)) throw new Error('扫描间隔请选择 10、30、60 或 120 秒。');
   const ranges: [keyof ExpansionSettings, number, number][] = [['scanMs', 10000, 120000], ['intervalMs', 1000, 2000], ['candidates', 1, 50], ['radius', 1, 128], ['horizonMs', 10000, 600000], ['maxTravelMs', 10000, 14400000], ['reserve', 0, 0xffffffff], ['maxSources', 1, maxCoalitionSources]];
   for (const [key, min, max] of ranges) if (!Number.isSafeInteger(s[key]) || s[key] < min || s[key] > max) throw new Error(`设置 ${key} 应为 ${min}–${max} 范围内的整数。`);
-  for (const key of ['cautiousExpansion', 'captureSuns', 'captureMeteorites', 'upgradeStable'] as const) if (s[key] !== 0 && s[key] !== 1) throw new Error(`设置 ${key} 应为开或关。`);
+  for (const key of ['peacefulDevelopment', 'cautiousExpansion', 'captureSuns', 'captureMeteorites', 'upgradeStable'] as const) if (s[key] !== 0 && s[key] !== 1) throw new Error(`设置 ${key} 应为开或关。`);
   if (!Number.isSafeInteger(s.economicHorizonMs) || s.economicHorizonMs < 60000 || s.economicHorizonMs > 86400000
     || !Number.isSafeInteger(s.stableMs) || s.stableMs < 60000 || s.stableMs > 86400000) throw new Error('收益周期与稳定时间应为 60–86400 秒。');
 }

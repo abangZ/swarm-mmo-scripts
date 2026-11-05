@@ -112,8 +112,9 @@ export class Commander {
   private activeConfigs() { return modes.flatMap(mode => this.configs[mode] ? [this.configs[mode]!] : []); }
   start(mode: Mode, config: ModeConfig): Promise<void> {
     if (this.states[mode].running || this.working && !this.active) return this.run ?? Promise.resolve();
-    if (mode === 'attack') config = { ...config, settings: { ...config.settings, intervalMs: 1000, captureSuns: 0, captureMeteorites: 0, upgradeStable: 0 } };
+    if (mode === 'attack') config = { ...config, settings: { ...config.settings, peacefulDevelopment: 0, intervalMs: 1000, captureSuns: 0, captureMeteorites: 0, upgradeStable: 0 } };
     validateSettings(config.settings); validatePolicy(config.policy, mode);
+    if (mode === 'expansion' && config.settings.peacefulDevelopment) config = { ...config, settings: { ...config.settings, captureSuns: 0, captureMeteorites: 1, cautiousExpansion: 1 } };
     if (mode === 'attack') this.offensive.reset();
     else { this.sunPlanner.reset(); this.planetPlanner.reset(); this.nextLogistics = 0; this.frontier.reset(); this.frontierQuotes.clear(); this.meteoritePlanner = new MeteoriteFrontier(); this.meteoriteQuotes.clear(); this.nextMeteorite = 0; this.nextFrontier = 0; this.expansionDelay = 0; this.upgrades.reset(); this.journal = new ExpansionJournal(); this.planningQuotes.clear(); }
     this.configs[mode] = structuredClone(config);
@@ -334,14 +335,14 @@ export class Commander {
             this.meteoriteTask = undefined; this.meteoriteCancel = undefined; this.wake?.();
           });
         }
-        if (!this.logisticsTask && Date.now() >= this.nextLogistics) {
+        if (!config.settings.peacefulDevelopment && !this.logisticsTask && Date.now() >= this.nextLogistics) {
           const controller = new AbortController(); this.logisticsCancel = controller;
           this.nextLogistics = Date.now() + 1000;
           this.logisticsTask = this.updateLogistics(config, controller.signal).catch(error => this.recover(error)).finally(() => {
             this.logisticsTask = undefined; this.logisticsCancel = undefined; this.wake?.();
           });
         }
-        if (!this.frontierTask && Date.now() >= this.nextFrontier) {
+        if (!config.settings.peacefulDevelopment && !this.frontierTask && Date.now() >= this.nextFrontier) {
           const controller = new AbortController(); this.frontierCancel = controller;
           this.nextFrontier = Date.now() + 1000;
           this.frontierTask = this.updateFrontier(config, controller.signal).catch(error => this.recover(error)).finally(() => {
@@ -746,7 +747,7 @@ export class Commander {
       this.planningMs = performance.now() - planningStarted;
       if (jobs.length || this.scanPlans.has('expansion')) this.emit('expansion', `后台评估完成：${(this.planningMs / 1000).toFixed(1)} 秒，待执行 ${jobs.length} 项；队列已合并；报价新算 ${this.planningQuotes.stats.fresh} / 复用 ${this.planningQuotes.stats.reused}${proposals.deferredSources ? `；${proposals.deferredSources} 颗来源的剩余候选下轮续查` : ''}`, jobs.length ? 'queued' : 'waiting');
       expansion = jobs[0];
-      if (!expansion) this.emit('expansion', `暂无可执行扩张：${proposals.readySources}/${proposals.sources.length} 颗来源可出兵；${idle[0]?.reason ?? '战区内暂无己方来源'}`, 'waiting');
+      if (!expansion) this.emit('expansion', `${config.settings.peacefulDevelopment ? '安稳发育：等待可占陨石或安全升级' : '暂无可执行扩张'}：${proposals.readySources}/${proposals.sources.length} 颗来源可出兵；${idle[0]?.reason ?? '战区内暂无己方来源'}`, 'waiting');
     }
     if (!current()) return;
     this.states[mode].work = { ...this.states[mode].work, plan: undefined };

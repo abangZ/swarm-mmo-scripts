@@ -30,29 +30,37 @@ const toggles = [
 ] as const;
 
 export function ExpansionSettings({ value, disabled, onChange, attack = false }: Props) {
+  const peaceful = !attack && value.peacefulDevelopment === '1';
   const id = (key: string) => attack ? `attack-${key}` : key;
   return <>
+    {!attack && <>
+      <SettingHeading htmlFor="peacefulDevelopment" label="运行模式" help="安稳发育持续占领可及时抵达的无主陨石，暂缓暴露目标，不扩张行星、恒星或为其集结；可选安全升级。保留守军、战区和断线恢复，切换后需手动启动。" />
+      <select id="peacefulDevelopment" disabled={disabled} value={value.peacefulDevelopment} onChange={event => onChange('peacefulDevelopment', event.target.value)}>
+        <option value="0">自动扩张</option><option value="1">安稳发育：挂机占陨石</option>
+      </select>
+      {peaceful && <p className="notice">只占无主陨石，暂缓暴露目标；无目标时持续等待。进攻模式独立运行，如需和平挂机请停止进攻。</p>}
+    </>}
     <SettingHeading htmlFor={id('scanMs')} label="扫描间隔" help="从本轮规划完成后开始计时，不等操作队列执行完。两个模式同时运行时，覆盖扫描采用较快的周期；操作队列和限速各自独立。" />
     <select id={id('scanMs')} disabled={disabled} value={value.scanMs} onChange={event => onChange('scanMs', event.target.value)}>
       {scanIntervals.map(ms => <option key={ms} value={ms / 1000}>{ms / 1000} 秒</option>)}
     </select>
     {numericFields.filter(field => !attack || field.key !== 'intervalMs').map(({ key, label, help, ...bounds }) => <div key={key}>
       <SettingHeading htmlFor={id(key)} label={label} help={help} />
-      <input id={id(key)} type="number" {...bounds} disabled={disabled} value={value[key]} onChange={event => onChange(key, event.target.value)} />
+      <input id={id(key)} type="number" {...bounds} disabled={disabled || peaceful && key === 'candidates'} value={value[key]} onChange={event => onChange(key, event.target.value)} />
     </div>)}
     {attack && <SettingHeading label="操作间隔：1 秒" help="进攻操作间隔固定为 1 秒，使用独立队列；等待本模式发射确认和库存同步后再执行下一项。" />}
     <SettingHeading htmlFor={id('maxTravelMs')} label="最长航行时间（秒）" help="默认 1800 秒（30 分钟），独立限制单次航程。近程先发，后方来源也可执行较远任务；搜索距离与固定战区仍生效。" />
     <input id={id('maxTravelMs')} type="number" min={10} max={14400} step={1} disabled={disabled} value={value.maxTravelMs} onChange={event => onChange('maxTravelMs', event.target.value)} />
     {!attack && <>
       <SettingHeading htmlFor="maxSources" label={`直接合兵最多协同星球数（1–${maxCoalitionSources}）`} help="默认 3 颗，填 1 表示仅单星直攻。同样占点数优先更早抵达，时间相同时优先更少来源，不为凑数量而拆兵。协同来源彼此距离不超过 8，抵达时差不超过 15 秒；一次批量派兵计一个操作。后方补给不受此数量限制，每批最多 50 颗。" />
-      <input id="maxSources" type="number" min={1} max={maxCoalitionSources} step={1} disabled={disabled} value={value.maxSources} onChange={event => onChange('maxSources', event.target.value)} />
+      <input id="maxSources" type="number" min={1} max={maxCoalitionSources} step={1} disabled={disabled || peaceful} value={value.maxSources} onChange={event => onChange('maxSources', event.target.value)} />
       <SettingHeading htmlFor="cautiousExpansion" label="扩张取向" help="默认持续派兵，不等待整波落地。两种取向均保留守军和已知来袭预算；风险按已观测邻敌与支援距离判断。" />
-      <select id="cautiousExpansion" disabled={disabled} value={value.cautiousExpansion} onChange={event => onChange('cautiousExpansion', event.target.value)}>
+      <select id="cautiousExpansion" disabled={disabled || peaceful} value={peaceful ? '1' : value.cautiousExpansion} onChange={event => onChange('cautiousExpansion', event.target.value)}>
         <option value="0">快速铺开：优先占更多点</option><option value="1">稳健扩张：暂缓孤立高风险点</option>
       </select>
       {toggles.map(({ key, label, help }) => <SettingHeading key={key} label={label} help={help}>
         <label className="strategy-toggle" htmlFor={key}>
-          <input id={key} type="checkbox" disabled={disabled} checked={value[key] === '1'} onChange={event => onChange(key, event.target.checked ? '1' : '0')} />{label}
+          <input id={key} type="checkbox" disabled={disabled || peaceful && key !== 'upgradeStable'} checked={peaceful && key !== 'upgradeStable' ? key === 'captureMeteorites' : value[key] === '1'} onChange={event => onChange(key, event.target.checked ? '1' : '0')} />{label}
         </label>
       </SettingHeading>)}
       <SettingHeading htmlFor="economicHorizonMs" label="收益评估周期（秒）" help="默认 10800 秒（3 小时）。用于评估占领收益与升级回本，独立于规划队列窗口；升级回本须在此周期内。" />

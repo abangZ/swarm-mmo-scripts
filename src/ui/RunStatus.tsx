@@ -26,7 +26,7 @@ export function StatusBadge({ state, uncertain }: { state: ExpansionState; uncer
 }
 const clockFormatter = new Intl.DateTimeFormat('zh-CN', { hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false });
 export function clockTime(time: number): string { return clockFormatter.format(time); }
-export function RunStatus({ state, uncertain, prefix = '' }: { state: ExpansionState; uncertain: boolean; prefix?: string }) {
+export function RunStatus({ state, uncertain, prefix = '', peaceful = false }: { state: ExpansionState; uncertain: boolean; prefix?: string; peaceful?: boolean }) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     if (!state.running) return;
@@ -49,7 +49,7 @@ export function RunStatus({ state, uncertain, prefix = '' }: { state: ExpansionS
       : state.phase}</p>
     {live && <div className="expansion-progress">
       {live.plan && <p>全局规划：{live.plan.stage}{live.plan.total !== undefined ? ` · 已检查 ${live.plan.completed ?? 0}/${live.plan.total} 颗来源` : ''} · 已耗时 {elapsed(live.plan.startedAt)}；已有队列继续执行</p>}
-      {!prefix && <p className="frontier-status">前线监测：{slowFrontier ? `正在检查 · ${elapsed(live.frontier!)}` : '已开启'}</p>}
+      {!prefix && <p className="frontier-status">{peaceful ? '陨石监测' : '前线监测'}：{!peaceful && slowFrontier ? `正在检查 · ${elapsed(live.frontier!)}` : '已开启'}</p>}
       <p>待执行 {state.queue.length} 项 · 后台回执 / 同步 {live.background ?? 0} 项{live.inventory ? ` · 库存重试 ${live.inventory} 颗来源` : ''}</p>
       <p className="muted">最近事件：{state.phase}</p>
     </div>}
