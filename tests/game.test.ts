@@ -19,9 +19,8 @@ test('controller discovery uses the map ref and requires fleet access', () => {
   canvas['__reactFiber$fixture'].return.memoizedProps.ref = { current: map };
   assert.equal(getAutomationSession().map, map);
 });
-test('game adapter uses native bulk launch and can read routes without a single-source quote', async () => {
+test('game adapter can read routes without a single-source quote', async () => {
   const f = fixture([]); f.session.conn.db.swarm = { iter: () => [] };
-  f.session.conn.reducers.launchSwarmBulk = mock.fn(async () => {});
   const canvas = document.querySelector('canvas') as unknown as Record<string, any>;
   canvas['__reactFiber$fixture'].return.memoizedProps.ref = { current: {
     quoteSend: () => ({ travelMs: 12000, lossPct: 25, outOfRange: true }),
@@ -30,8 +29,27 @@ test('game adapter uses native bulk launch and can read routes without a single-
   const world = new GameWorld();
   assert.deepEqual(world.route(1n, 10n), { travelMs: 12000, lossPct: 25 });
   assert.equal(world.quote(1n, 10n), null);
+});
+
+test('single and bulk launches send bigint probe counts to the native reducers', async () => {
+  const f = fixture([]);
+  f.session.conn.db.swarm = { iter: () => [] };
+  const canvas = document.querySelector('canvas') as unknown as Record<string, any>;
+  canvas['__reactFiber$fixture'].return.memoizedProps.ref = { current: {
+    quoteSend: () => null, listOwnedBodies: () => [],
+  } };
+  const bulk = mock.fn(async () => {});
+  f.session.conn.reducers.launchSwarmBulk = bulk;
+  const world = new GameWorld();
+  await world.launch(1n, 4253062n, 6);
+  assert.deepEqual(f.launchSwarm.mock.calls.map(call => call.arguments), [
+    [{ sourcePlanetId: 1n, targetPlanetId: 4253062n, probeCount: 6n }],
+  ]);
+
   await world.launchGroup({ sourceId: 1n, targetId: 10n, count: 8, travelMs: 12000, support: [{ sourceId: 2n, count: 9, travelMs: 12000 }] });
-  assert.deepEqual((f.session.conn.reducers.launchSwarmBulk as any).mock.calls[0].arguments[0], { kind: 0, targetId: 10n, launches: [{ sourceId: 1n, probeCount: 8 }, { sourceId: 2n, probeCount: 9 }] });
+  assert.deepEqual(bulk.mock.calls.map(call => call.arguments), [
+    [{ kind: 0, targetId: 10n, launches: [{ sourceId: 1n, probeCount: 8n }, { sourceId: 2n, probeCount: 9n }] }],
+  ]);
 });
 
 test('query timeout unsubscribes', async t => {

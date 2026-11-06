@@ -216,7 +216,7 @@ export class GameWorld implements ExpansionWorld {
     assertSession(this.session);
     const reducer = this.session.conn.reducers.launchSwarmBulk;
     if (!reducer) throw new Error('游戏批量发射接口不可用，未执行联合占领。');
-    return this.session.conn.reducers.launchSwarmBulk!({ kind: 0, targetId: job.targetId, launches: members(job).map(m => ({ sourceId: m.sourceId, probeCount: m.count })) });
+    return this.session.conn.reducers.launchSwarmBulk!({ kind: 0, targetId: job.targetId, launches: members(job).map(m => ({ sourceId: m.sourceId, probeCount: BigInt(m.count) })) });
   }
   supportsGroup() { return typeof this.session.conn.reducers.launchSwarmBulk === 'function'; }
   quoteBody(source: bigint, target: bigint, kind: 'sun' | 'comet') {
@@ -243,8 +243,8 @@ export class GameWorld implements ExpansionWorld {
   launchBody(job: Assignment): Promise<void> {
     assertSession(this.session);
     const reducers = this.session.conn.reducers;
-    if (job.targetKind === 'sun' && reducers.launchSwarmAtSun) return reducers.launchSwarmAtSun({ sourcePlanetId: job.sourceId, targetSunId: job.targetId, probeCount: job.count });
-    if (job.targetKind === 'comet' && reducers.launchSwarmAtMeteorite) return reducers.launchSwarmAtMeteorite({ sourcePlanetId: job.sourceId, targetMeteoriteId: job.targetId, probeCount: job.count });
+    if (job.targetKind === 'sun' && reducers.launchSwarmAtSun) return reducers.launchSwarmAtSun({ sourcePlanetId: job.sourceId, targetSunId: job.targetId, probeCount: BigInt(job.count) });
+    if (job.targetKind === 'comet' && reducers.launchSwarmAtMeteorite) return reducers.launchSwarmAtMeteorite({ sourcePlanetId: job.sourceId, targetMeteoriteId: job.targetId, probeCount: BigInt(job.count) });
     throw new Error('目标的原生派兵接口不可用，未发射。');
   }
   upgrade(planetId: bigint): Promise<void> {
@@ -278,7 +278,7 @@ export class GameWorld implements ExpansionWorld {
   }
   launch(source: bigint, target: bigint, count: number) {
     assertSession(this.session);
-    return this.session.conn.reducers.launchSwarm({ sourcePlanetId: source, targetPlanetId: target, probeCount: count });
+    return this.session.conn.reducers.launchSwarm({ sourcePlanetId: source, targetPlanetId: target, probeCount: BigInt(count) });
   }
   dispose() { for (const sub of this.subscriptions.values()) { try { sub.unsubscribe(); } catch { /* A disconnected subscription is already unusable. */ } } this.subscriptions.clear(); this.quotes.clear(); this.tileBatches = []; this.ownerBatches = []; }
 }

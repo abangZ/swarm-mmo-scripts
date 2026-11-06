@@ -246,7 +246,7 @@ test('special targets use separate native quotes, target fleet tables and reduce
   assert.deepEqual(f.native.mock.calls.map(c => c.arguments), [['planet', 1n, 'sun', 2n], ['planet', 1n, 'comet', 2n], ['planet', 1n, 'planet', 2n]]);
   const job = { sourceId: 1n, targetId: 2n, count: 100, travelMs: 2000 };
   await f.world.launchBody({ ...job, targetKind: 'sun' }); await f.world.launchBody({ ...job, targetKind: 'comet' }); await f.world.upgrade(1n);
-  assert.deepEqual(calls, [['sun', { sourcePlanetId: 1n, targetSunId: 2n, probeCount: 100 }], ['comet', { sourcePlanetId: 1n, targetMeteoriteId: 2n, probeCount: 100 }], ['upgrade', { planetId: 1n }]]);
+  assert.deepEqual(calls, [['sun', { sourcePlanetId: 1n, targetSunId: 2n, probeCount: 100n }], ['comet', { sourcePlanetId: 1n, targetMeteoriteId: 2n, probeCount: 100n }], ['upgrade', { planetId: 1n }]]);
 });
 
 test('420-source edge growth preserves full coverage batches instead of rechunking unchanged tiles', async t => {

@@ -27,9 +27,9 @@ export interface Connection {
     attack_automation?: Table<{ sourcePlanetId: bigint }>;
     upgrade_automation?: Table<{ planetId: bigint }>;
   };
-  reducers: { launchSwarmBulk?(args: { kind: number; targetId: bigint; launches: { sourceId: bigint; probeCount: number }[] }): Promise<void>; launchSwarm(args: { sourcePlanetId: bigint; targetPlanetId: bigint; probeCount: number }): Promise<void>;
-    launchSwarmAtSun?(args: { sourcePlanetId: bigint; targetSunId: bigint; probeCount: number }): Promise<void>;
-    launchSwarmAtMeteorite?(args: { sourcePlanetId: bigint; targetMeteoriteId: bigint; probeCount: number }): Promise<void>;
+  reducers: { launchSwarmBulk?(args: { kind: number; targetId: bigint; launches: { sourceId: bigint; probeCount: bigint }[] }): Promise<void>; launchSwarm(args: { sourcePlanetId: bigint; targetPlanetId: bigint; probeCount: bigint }): Promise<void>;
+    launchSwarmAtSun?(args: { sourcePlanetId: bigint; targetSunId: bigint; probeCount: bigint }): Promise<void>;
+    launchSwarmAtMeteorite?(args: { sourcePlanetId: bigint; targetMeteoriteId: bigint; probeCount: bigint }): Promise<void>;
     upgradePlanetsBulk?(args: { planetIds: bigint[] }): Promise<void>;
     upgradePlanet?(args: { planetId: bigint }): Promise<void> };
   subscriptionBuilder(): {
