@@ -28,7 +28,7 @@ export class BackgroundPlanner {
   async proposals(world: ExpansionWorld, snapshot: WorldSnapshot, config: ModeConfig, budgets: Map<bigint, number>, locked: Set<bigint>, signal: AbortSignal, current: () => boolean, progress?: (completed: number, total: number) => void) {
     const revision = this.revision;
     const key = snapshot.quoteVersion === undefined ? undefined : fingerprint([snapshot.quoteVersion, config, snapshot.planets, snapshot.owned,
-      [...budgets], [...locked], [...snapshot.incoming], snapshot.fleets, [...snapshot.fleetsByTarget ?? []], snapshot.attackMultiplierUpperBound, [...snapshot.automated ?? []], snapshot.intelligence, snapshot.identity, [...snapshot.allies ?? []]]);
+      [...budgets], [...snapshot.productionTicks ?? []], [...locked], [...snapshot.incoming], snapshot.fleets, [...snapshot.fleetsByTarget ?? []], snapshot.attackMultiplierUpperBound, [...snapshot.automated ?? []], snapshot.intelligence, snapshot.identity, [...snapshot.allies ?? []]]);
     if (!this.search.pending && key && this.previous?.key === key && this.previous.expires > Date.now() && !signal.aborted && current()) {
       progress?.(this.previous.result.sources.length, this.previous.result.sources.length);
       return this.previous.result;

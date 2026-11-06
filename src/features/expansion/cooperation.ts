@@ -15,7 +15,7 @@ function permutations<T>(items: T[]): T[][] {
   return items.length < 2 ? [items] : items.flatMap((item, i) => permutations(items.filter((_, j) => i !== j)).map(tail => [item, ...tail]));
 }
 // Neutral planets have no owner technology or production. Ignoring attacker Assault is conservative.
-// Allocate garrison + 1 to win, plus the shared arrival margin after per-fleet tolls.
+// Require one more arrival than the garrison, after each fleet pays its own toll.
 export function coalitionOptions(target: Planet, sources: GroupSource[], settings: ExpansionSettings): Assignment[] {
   if (target.ownerId != null || sources.length < 2 || sources.length > settings.maxSources || sources.length > maxCoalitionSources) return [];
   if (new Set(sources.map(s => s.planet.planetId)).size !== sources.length) return [];
@@ -25,7 +25,7 @@ export function coalitionOptions(target: Planet, sources: GroupSource[], setting
     if (sources.some(other => distance(source.planet, other.planet) > cooperationRadius)) return [];
   }
   if (Math.max(...sources.map(s => s.travelMs)) - Math.min(...sources.map(s => s.travelMs)) > arrivalSpreadMs) return [];
-  const required = target.probeCount + 1 + captureMargin;
+  const required = target.probeCount + captureMargin;
   if (required < sources.length || sources.reduce((sum, s) => sum + arriving(s.available, s.lossPct), 0) < required) return [];
   const results = new Map<string, Assignment>();
   // Keep exhaustive variants for 2–3 sources. Larger coalitions use four bounded

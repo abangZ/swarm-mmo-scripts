@@ -96,6 +96,68 @@ test('an affordable neutral sun uses its native whole-super-probe quote and rema
   assert.equal(finishPlanning(planner.steps(f.world, f.snapshot, config(), f.snapshot.budgets, new Set(['sun:2']))).job, undefined);
 });
 
+test('sun discovery funds the 3-garrison sun before two nearer expensive suns and keeps launched supply attached', () => {
+  const f = specialWorld();
+  const donor = planet(4n, -1, 0, true);
+  f.snapshot.owned.push(donor); f.snapshot.planets = [...f.snapshot.owned];
+  f.snapshot.budgets = new Map([[1n, 50], [4n, 2100]]);
+  const cheap = { ...sun(30n, 3), positionX: 15 };
+  f.snapshot.suns = [sun(19n, 19), { ...sun(18n, 18), positionX: 3 }, cheap];
+  f.world.quoteBody = () => null;
+  const planner = new SunPlanner();
+  const plan = () => finishPlanning(planner.steps(f.world, f.snapshot, config(), f.snapshot.budgets, new Set()));
+  // Only the lead has a launch route. Recruit the actual gap from the donor.
+  f.world.routeBody = source => source === 1n ? { travelMs: 15000, lossPct: 0 } : null;
+  const first = plan();
+  assert.equal(first.job?.sunId, cheap.sunId); assert.equal(first.state?.required, 400); assert.equal(first.job?.count, 350);
+  planner.launched(first.job!, f.snapshot);
+  f.snapshot.suns.push(sun(31n, 0));
+  const waiting = plan();
+  assert.equal(waiting.sun, cheap.sunId); assert.equal(waiting.state?.incoming, 350); assert.equal(waiting.job, undefined);
+});
+
+test('sun discovery compares ordinary probe prices including conversion and loss, and skips blocked routes', () => {
+  const f = specialWorld(), cheap = sun(3n, 3), expensive = sun(19n, 19);
+  f.snapshot.suns = [cheap, expensive]; f.snapshot.budgets.set(1n, 5000);
+  const plan = (locked = new Set<string>()) => finishPlanning(new SunPlanner().steps(f.world, f.snapshot, config(), f.snapshot.budgets, locked));
+  f.world.routeBody = (_hub, id) => ({ travelMs: 1000, lossPct: id === 3n ? 90 : 0 });
+  f.world.quoteBody = (_hub, id) => ({ travelMs: 1000, count: id === 3n ? 4000 : 2000 });
+  assert.equal(plan().job?.targetId, 19n);
+  f.world.quoteBody = (_hub, id) => ({ travelMs: 1000, count: id === 3n ? 380 : 2000 });
+  assert.equal(plan().job?.targetId, 3n);
+  assert.equal(plan(new Set(['sun:3'])).job?.targetId, 19n);
+  f.world.routeBody = (_hub, id) => id === 3n ? null : { travelMs: 1000, lossPct: 0 };
+  assert.equal(plan().job?.targetId, 19n);
+});
+
+test('a cheap sun with no viable supply does not block a fundable alternative', () => {
+  const f = specialWorld(), rich = planet(8n, 8, 0, true);
+  f.snapshot.owned.push(rich); f.snapshot.planets = [...f.snapshot.owned];
+  f.snapshot.budgets = new Map([[1n, 50], [8n, 2000]]);
+  f.snapshot.suns = [sun(3n, 3), sun(19n, 19)];
+  f.world.routeBody = (hub, id) => (hub === 1n && id === 3n || hub === 8n && id === 19n) ? { travelMs: 1000, lossPct: 0 } : null;
+  f.world.quoteBody = (hub, id) => hub === 8n && id === 19n ? { travelMs: 1000, count: 2000 } : null;
+  f.world.route = () => null;
+  const planner = new SunPlanner();
+  const plan = () => finishPlanning(planner.steps(f.world, f.snapshot, config(), f.snapshot.budgets, new Set()));
+  const unfunded = plan();
+  assert.equal(unfunded.job, undefined); assert.equal(unfunded.reservations.size, 0);
+  assert.equal(plan().job?.targetId, 19n);
+});
+
+test('large sun searches retain a cheaper reachable hub beyond the first bounded route window', () => {
+  const f = specialWorld(), planner = new SunPlanner();
+  f.snapshot.owned = Array.from({ length: 546 }, (_, i) => planet(BigInt(100 + i), 0, 0, true));
+  f.snapshot.planets = [...f.snapshot.owned]; f.snapshot.budgets = new Map(f.snapshot.owned.map(p => [p.planetId, 2000]));
+  f.snapshot.suns = [sun(19n, 19), { ...sun(3n, 3), positionX: 15 }];
+  const route = mock.fn((source: bigint, target: bigint) =>
+    target === 3n && source < 120n ? null : { travelMs: 1000, lossPct: 0 });
+  f.world.routeBody = route; f.world.quoteBody = (_source, target) => ({ travelMs: 1000, count: target === 3n ? 400 : 2000 });
+  const plan = () => finishPlanning(planner.steps(f.world, f.snapshot, config(), f.snapshot.budgets, new Set()));
+  assert.equal(plan().job, undefined); assert.equal(route.mock.callCount(), 16);
+  assert.equal(plan().job?.targetId, 3n); assert.equal(route.mock.callCount(), 32);
+});
+
 test('60 + 60 probes gather to one friendly planet, wait for real inventory, then attack the sun once', () => {
   const f = specialWorld(); f.snapshot.planets = [f.source];
   const donor = planet(3n, 0, 1, true); f.snapshot.owned.push(donor); f.snapshot.planets.push(donor);

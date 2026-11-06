@@ -16,12 +16,12 @@ function army(count = 0, kind: 'planet' | 'sun' = 'planet') {
   f.snapshot.owned.push(...donors); f.snapshot.planets.push(...donors);
   for (const p of f.snapshot.owned) f.snapshot.budgets.set(p.planetId, 100);
   Object.assign(f.snapshot, { quoteVersion: 'rules-1', attackMultiplierUpperBound: 1, identity: 'me', intelligence: true, allies: new Set(['me']), automated: new Set(), fleets: [], bodyFleets: new Map() });
-  f.target.probeCount = 398;
+  f.target.probeCount = 399;
   f.snapshot.suns = kind === 'sun' ? [{ sunId: 2n, positionX: 1, positionY: 0, galaxyId: 1n, probeCount: 120 }] : [];
   if (kind === 'sun') f.snapshot.planets = [...f.snapshot.owned];
   f.world.route = (source, target) => ({ travelMs: target === 1n ? 10000 : source === 1n ? 1000 : 99999999, lossPct: 0 });
   f.world.routeBody = source => ({ travelMs: source === 1n ? 1000 : 99999999, lossPct: 0 });
-  f.world.quote = source => (f.snapshot.budgets.get(source) ?? 0) >= f.target.probeCount + 2 ? { count: f.target.probeCount + 2, travelMs: 1000 } : null;
+  f.world.quote = source => (f.snapshot.budgets.get(source) ?? 0) >= f.target.probeCount + 1 ? { count: f.target.probeCount + 1, travelMs: 1000 } : null;
   f.world.quoteBody = source => (f.snapshot.budgets.get(source) ?? 0) >= 12100 ? { count: 12100, travelMs: 1000 } : null;
   f.world.launchGroup = mock.fn(async () => {}); f.world.launchBody = mock.fn(async () => {}); f.world.upgradeMany = mock.fn(async () => {});
   const planner = new LogisticsPlanner(kind), cfg = config();
@@ -71,7 +71,7 @@ test('an affordable new neighbor is captured without abandoning the persistent e
 });
 
 for (const kind of ['planet', 'sun'] as const) test(`${kind} recruits over 100 sources in persistent batches of 50, waits for stock, and never re-funds in-flight batches`, () => {
-  const f = army(130, kind); f.cfg.settings.maxSources = 1; f.target.probeCount = 12098;
+  const f = army(130, kind); f.cfg.settings.maxSources = 1; f.target.probeCount = 12099;
   const sizes: number[] = [], donors = new Set<bigint>();
   let total = 0;
   for (let n = 0; n < 4; n++) {
@@ -121,7 +121,7 @@ test('ETA accounts for the earliest sufficient arrival prefix rather than waitin
 
 test('the commander keeps a multi-batch rear supply campaign, then attacks only after actual inventory arrives', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
-  const f = army(130); f.target.probeCount = 12098; f.cfg.settings.upgradeStable = 0; f.cfg.settings.stableMs = 600000;
+  const f = army(130); f.target.probeCount = 12099; f.cfg.settings.upgradeStable = 0; f.cfg.settings.stableMs = 600000;
   const batches: number[] = [], captures: bigint[] = [];
   f.world.launchGroup = async job => {
     batches.push(members(job).length);
@@ -162,7 +162,7 @@ test('the commander executes an ETA-approved frontier upgrade despite nearby neu
 
 test('stopping cancels a sliced logistics draft without publishing reservations or sending its batch', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
-  const f = army(130); f.target.probeCount = 12098; f.cfg.settings.stableMs = 600000;
+  const f = army(130); f.target.probeCount = 12099; f.cfg.settings.stableMs = 600000;
   let time = 0; const route = f.world.route!;
   t.mock.method(performance, 'now', () => time);
   f.world.route = (...args) => { time += 10; return route(...args); };
@@ -187,7 +187,7 @@ test('unchanged ordinary expansion proposals are reused, but inventory and fleet
 });
 
 test('known cross-galaxy supply is deduplicated by source/count/arrival while unmatched unknown supply pauses recruitment', () => {
-  const f = army(130); f.target.probeCount = 12098;
+  const f = army(130); f.target.probeCount = 12099;
   const first = f.plan().job!;
   f.planner.launched(first, f.snapshot);
   f.snapshot.fleets = members(first).map((m, i) => ({ id: BigInt(i + 1), owner: 'me', source: m.sourceId, target: 1n, count: m.count, arriving: null, arrival: Date.now() + m.travelMs }));

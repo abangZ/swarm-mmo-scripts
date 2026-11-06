@@ -240,8 +240,8 @@ test('special targets use separate native quotes, target fleet tables and reduce
   assert.equal(snapshot.fleets!.length, 0); assert.equal(snapshot.bodyFleets!.get('sun:2')!.length, 2); assert.equal(snapshot.bodyFleets!.get('comet:2')!.length, 1);
   f.native.mock.mockImplementation(() => ({ travelMs: 2000, lossPct: 0, outOfRange: false, exact: { reason: 'capture', probes: 100 } }));
   assert.equal(f.world.quoteBody(1n, 2n, 'sun')!.count, 100, 'sun quote is already denominated in launch probes, not super-probes');
-  assert.equal(f.world.quoteBody(1n, 2n, 'comet')!.count, 101);
-  assert.equal(f.world.quote(1n, 2n)!.count, 101);
+  assert.equal(f.world.quoteBody(1n, 2n, 'comet')!.count, 100);
+  assert.equal(f.world.quote(1n, 2n)!.count, 100);
   assert.equal(f.native.mock.callCount(), 3);
   assert.deepEqual(f.native.mock.calls.map(c => c.arguments), [['planet', 1n, 'sun', 2n], ['planet', 1n, 'comet', 2n], ['planet', 1n, 'planet', 2n]]);
   const job = { sourceId: 1n, targetId: 2n, count: 100, travelMs: 2000 };

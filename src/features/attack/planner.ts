@@ -34,7 +34,7 @@ export function attackQuote(world: ExpansionWorld, snapshot: WorldSnapshot, sour
     const updated = Number(target.lastUpdateTick?.toMillis());
     if (!Number.isFinite(updated)) return null;
     const ticks = Math.ceil((Math.max(0, Date.now() - updated) + route.travelMs) / 40000);
-    count = Math.ceil(((target.probeCount + ticks * level!) * 2 + 1 + captureMargin) * 100 / (100 - route.lossPct)) + extra;
+    count = Math.ceil(((target.probeCount + ticks * level!) * 2 + captureMargin) * 100 / (100 - route.lossPct)) + extra;
   }
   if (!Number.isSafeInteger(count) || count < 1 || count > 0xffffffff) return null;
   const near = distance(source, target);

@@ -19,7 +19,7 @@ export interface ExpansionState {
   attackDiagnostics?: AttackDiagnostics;
   planning?: { sources: number; ready: number; assigned: number; idle: SourceReport[] };
   metrics?: StrategyMetrics; decisions?: string[]; exposed?: number;
-  sun?: { target: bigint; hub?: bigint; waiting?: string };
+  suns?: { target: bigint; hub?: bigint; waiting?: string }[];
 }
 /** Compatibility facade; all execution is owned by the shared commander. */
 export class ExpansionEngine {

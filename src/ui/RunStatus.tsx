@@ -53,8 +53,8 @@ export function RunStatus({ state, uncertain, prefix = '', peaceful = false }: {
       <p>待执行 {state.queue.length} 项 · 后台回执 / 同步 {live.background ?? 0} 项{live.inventory ? ` · 库存重试 ${live.inventory} 颗来源` : ''}</p>
       <p className="muted">最近事件：{state.phase}</p>
     </div>}
-    {state.sun && <p>{state.sun.waiting ?? `本轮恒星目标 #${state.sun.target}${state.sun.hub ? `，汇集星球 #${state.sun.hub}` : ''}`}</p>}
-    {state.logistics?.map(plan => <div className="rally-status" key={plan.kind}>
+    {state.suns?.map(sun => <p key={String(sun.target)}>{sun.waiting ?? `本轮恒星目标 #${sun.target}${sun.hub !== undefined ? `，汇集星球 #${sun.hub}` : ''}`}</p>)}
+    {state.logistics?.map(plan => <div className="rally-status" key={`${plan.kind}:${plan.target}`}>
       <strong>{plan.kind === 'sun' ? '恒星募集' : '前线补给'}：#{String(plan.hub)} → #{String(plan.target)}</strong>
       <p>{plan.phase} · 可用 {plan.available}/{plan.required} · 补给在途 {plan.incoming}<br />
         待募集 {plan.donors} 颗 · 航路已检查 {plan.checked}/{plan.total}<br />

@@ -133,7 +133,7 @@ test('optimistic combat bound skips impossible quotes without removing viable co
   f.snapshot.owned = [f.source]; f.snapshot.identity = 'me';
   f.snapshot.fleets = [{ id: 1n, target: 2n, owner: 'me', count: 20, arriving: 20, arrival: Date.now() }];
   const topup = f.plan();
-  assert.ok(topup.edges.some(j => j.targetId === 2n && j.count === 2));
+  assert.ok(topup.edges.some(j => j.targetId === 2n && j.count === 1));
 });
 
 test('large weak empires avoid native quotations on the cold pass, retaining every source for diagnostics', t => {

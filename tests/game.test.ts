@@ -6,10 +6,10 @@ import { getAutomationSession } from '../src/game/session';
 import { subscribe } from '../src/game/subscriptions';
 import { fixture } from './helpers/fixtures';
 
-test('capture quote adds one including re-quotes, and rejects invalid quotes', () => {
-  assert.deepEqual(safeQuote({ travelMs: 2000, lossPct: 0, outOfRange: false, exact: { reason: 'capture', probes: 8 } }), { count: 9, travelMs: 2000 });
+test('capture quote preserves the native winning count and rejects invalid quotes', () => {
+  assert.deepEqual(safeQuote({ travelMs: 2000, lossPct: 0, outOfRange: false, exact: { reason: 'capture', probes: 8 } }), { count: 8, travelMs: 2000 });
   assert.equal(safeQuote({ travelMs: 2, lossPct: 0, outOfRange: false, exact: { reason: 'levelUp', probes: 8 } }), null);
-  assert.equal(safeQuote({ travelMs: 2, lossPct: 0, outOfRange: false, exact: { reason: 'capture', probes: 0xffffffff } }), null);
+  assert.equal(safeQuote({ travelMs: 2, lossPct: 0, outOfRange: false, exact: { reason: 'capture', probes: 0x100000000 } }), null);
 });
 test('controller discovery uses the map ref and requires fleet access', () => {
   const f = fixture([]);

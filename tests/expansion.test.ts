@@ -7,9 +7,9 @@ import { unresolved, withControl } from '../src/runtime/operations';
 import { fakeWorld, coalitionWorld, identity, planet, settle } from './helpers/fixtures';
 import { safeQuote } from '../src/game/expansion-world';
 
-test('one source captures garrisons 1 and 2 with one safety probe each without waiting for a full scan', async t => {
+test('one source captures garrisons 4 and 1 with five and two probes without waiting for a full scan', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
-  const f = fakeWorld(); f.target.probeCount = 2;
+  const f = fakeWorld(); f.target.probeCount = 4;
   const second = planet(3n, 2, 1); second.probeCount = 1; f.snapshot.planets.push(second);
   f.snapshot.budgets.set(1n, 7);
   f.world.quote = (_source, id) => safeQuote({ travelMs: id === 2n ? 1000 : 2000, lossPct: 0, outOfRange: false, exact: { reason: 'capture', probes: f.snapshot.planets.find(p => p.planetId === id)!.probeCount + 1 } });
@@ -20,21 +20,21 @@ test('one source captures garrisons 1 and 2 with one safety probe each without w
   t.mock.timers.tick(1500); await settle();
   const calls = (f.world.launch as any).mock.calls.map((c: any) => c.arguments);
   assert.equal(calls.length, 2);
-  assert.deepEqual(calls.map((c: any[]) => [c[1], c[2]]).sort(), [[2n, 4], [3n, 3]]);
+  assert.deepEqual(calls.map((c: any[]) => [c[1], c[2]]).sort(), [[2n, 5], [3n, 2]]);
   assert.equal(f.snapshot.budgets.get(1n), 0);
   assert.equal((f.world.scan as any).mock.callCount(), 1);
   assert.equal((f.world.syncInventory as any).mock.callCount(), 2);
   engine.stop(); t.mock.timers.tick(500); await run;
 });
 
-test('a neutral garrison of one uses a single affordable source instead of a 1 plus 2 coalition', async t => {
+test('a neutral garrison of one uses a single affordable source instead of two one-probe fleets', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
   const f = coalitionWorld(); f.target.probeCount = 1;
-  f.snapshot.budgets.set(1n, 2); f.snapshot.budgets.set(4n, 5);
-  f.world.quote = source => f.snapshot.budgets.get(source)! >= 3 ? { count: 3, travelMs: 10000 } : null;
+  f.snapshot.budgets.set(1n, 1); f.snapshot.budgets.set(4n, 2);
+  f.world.quote = source => f.snapshot.budgets.get(source)! >= 2 ? { count: 2, travelMs: 10000 } : null;
   const engine = new ExpansionEngine(() => {}, () => f.world);
   const run = engine.start(defaults); await settle();
-  assert.deepEqual((f.world.launch as any).mock.calls[0].arguments, [4n, 2n, 3]);
+  assert.deepEqual((f.world.launch as any).mock.calls[0].arguments, [4n, 2n, 2]);
   assert.equal((f.world.launchGroup as any).mock.callCount(), 0);
   engine.stop(); t.mock.timers.tick(500); await run;
 });
@@ -44,11 +44,12 @@ test('a queued coalition keeps its planned allocation without re-quoting after p
   localStorage.setItem('swarm-helper-last-operation-v1', '100000');
   const f = coalitionWorld(); f.target.probeCount = 4;
   f.snapshot.budgets.set(1n, 3); f.snapshot.budgets.set(4n, 3);
-  f.world.quote = source => f.snapshot.budgets.get(source)! >= 6 ? { count: 6, travelMs: 10000 } : null;
+  f.world.quote = source => f.snapshot.budgets.get(source)! >= 5 ? { count: 5, travelMs: 10000 } : null;
   const engine = new ExpansionEngine(() => {}, () => f.world);
   const run = engine.start(defaults); await settle();
   assert.equal(members(engine.state.queue[0]).length, 2);
   const planned = structuredClone(engine.state.queue[0]);
+  assert.equal(totalCount(planned), 5);
   f.snapshot.budgets.set(1n, 6); t.mock.timers.tick(1500); await settle();
   assert.equal((f.world.launch as any).mock.callCount(), 0);
   assert.deepEqual((f.world.launchGroup as any).mock.calls[0].arguments, [planned]);
@@ -149,7 +150,7 @@ test('engine submits a whole triple in one operation and tracks capture once', a
   const run = engine.start(defaults); await settle();
   assert.equal((f.world.launchGroup as any).mock.callCount(), 1);
   const job = (f.world.launchGroup as any).mock.calls[0].arguments[0];
-  assert.equal(members(job).length, 3); assert.equal(totalCount(job), 12);
+  assert.equal(members(job).length, 3); assert.equal(totalCount(job), 11);
   assert.equal((f.world.launch as any).mock.callCount(), 0);
   assert.equal(engine.state.sent, 3); assert.equal(engine.state.flights, 1);
   f.snapshot.incoming.add(2n);
@@ -205,7 +206,7 @@ test('execution preserves the optimized split that leaves troops for another tar
   t.mock.timers.tick(1500); await settle();
   const job = (f.world.launchGroup as any).mock.calls[0].arguments[0];
   assert.ok(members(job).find(m => m.sourceId === 1n)!.count <= 5);
-  assert.equal(totalCount(job), 12);
+  assert.equal(totalCount(job), 11);
   engine.stop(); t.mock.timers.tick(500); await run;
 });
 

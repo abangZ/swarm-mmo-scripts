@@ -16,7 +16,7 @@ import { arriving } from '../expansion/cooperation';
 import { availableBudgets, hostile, reserveFor } from './safety';
 import { distance } from '../../shared/distance';
 import { inZone, validatePolicy, type Mode, type ModeConfig } from './types';
-import { LogisticsPlanner } from '../expansion/logistics';
+import { LogisticsPlanner, logisticsQuoteBudget, logisticsPairBudget, type LogisticsPlan } from '../expansion/logistics';
 import { MeteoriteFrontier } from '../expansion/meteorite-frontier';
 import { decisionLabel, ExpansionJournal, StableUpgrades, validSpecialTarget, specialTargetSkipReason } from '../expansion/strategy';
 
@@ -80,13 +80,18 @@ export class Commander {
   private saving?: { key: string; until: number };
   private savingCooldown = 0;
   private offensive = new OffensivePlanner();
-  private sunPlanner = new LogisticsPlanner('sun');
-  private planetPlanner = new LogisticsPlanner('planet');
+  // Each slot owns its in-flight deliveries and only its share of the common stock.
+  private logistics = (['sun', 'sun', 'sun', 'planet'] as const).map(kind => ({
+    planner: new LogisticsPlanner(kind), reserves: new Map<bigint, number>(),
+  }));
+  private resetLogistics() {
+    for (const slot of this.logistics) { slot.planner.reset(); slot.reserves.clear(); }
+    this.states.expansion.suns = []; this.states.expansion.logistics = [];
+  }
   private logisticsTask?: Promise<void>;
   private logisticsCancel?: AbortController;
   private logisticsRevision = 0;
   private nextLogistics = 0;
-  private logisticsReserves = { sun: new Map<bigint, number>(), planet: new Map<bigint, number>() };
   private logisticsReservations = new Map<bigint, number>();
   private upgrades = new StableUpgrades();
   private journal = new ExpansionJournal();
@@ -116,7 +121,7 @@ export class Commander {
     validateSettings(config.settings); validatePolicy(config.policy, mode);
     if (mode === 'expansion' && config.settings.peacefulDevelopment) config = { ...config, settings: { ...config.settings, captureSuns: 0, captureMeteorites: 1, cautiousExpansion: 1 } };
     if (mode === 'attack') this.offensive.reset();
-    else { this.sunPlanner.reset(); this.planetPlanner.reset(); this.nextLogistics = 0; this.frontier.reset(); this.frontierQuotes.clear(); this.meteoritePlanner = new MeteoriteFrontier(); this.meteoriteQuotes.clear(); this.nextMeteorite = 0; this.nextFrontier = 0; this.expansionDelay = 0; this.upgrades.reset(); this.journal = new ExpansionJournal(); this.planningQuotes.clear(); }
+    else { this.resetLogistics(); this.nextLogistics = 0; this.frontier.reset(); this.frontierQuotes.clear(); this.meteoritePlanner = new MeteoriteFrontier(); this.meteoriteQuotes.clear(); this.nextMeteorite = 0; this.nextFrontier = 0; this.expansionDelay = 0; this.upgrades.reset(); this.journal = new ExpansionJournal(); this.planningQuotes.clear(); }
     this.configs[mode] = structuredClone(config);
     this.states[mode] = { ...idleState(), running: true };
     this.revision++; this.nextScan = 0; this.nextPlan = { expansion: 0, attack: 0 }; this.interruptWaiting();
@@ -128,7 +133,7 @@ export class Commander {
     for (const m of mode ? [mode] : modes) {
       delete this.configs[m];
       this.states[m].queue = [];
-      if (m === 'expansion') { this.planner.dispose(); this.sunPlanner.reset(); this.planetPlanner.reset(); this.nextLogistics = 0; this.frontier.reset(); this.frontierQuotes.clear(); this.meteoritePlanner = new MeteoriteFrontier(); this.meteoriteQuotes.clear(); this.nextMeteorite = 0; this.logisticsReservations.clear(); this.logisticsReserves = { sun: new Map(), planet: new Map() }; this.upgrades.reset(); this.planningQuotes.clear(); }
+      if (m === 'expansion') { this.planner.dispose(); this.resetLogistics(); this.nextLogistics = 0; this.frontier.reset(); this.frontierQuotes.clear(); this.meteoritePlanner = new MeteoriteFrontier(); this.meteoriteQuotes.clear(); this.nextMeteorite = 0; this.logisticsReservations.clear(); this.upgrades.reset(); this.planningQuotes.clear(); }
       if (m === 'attack') { this.attackReservations.clear(); this.saving = undefined; this.savingCooldown = 0; this.offensive.reset(); this.states.attack.rally = undefined; this.states.attack.rallies = undefined; }
       if (this.states[m].running) this.emit(m, '正在停止；已发射舰队仍继续航行', 'stopping');
     }
@@ -153,8 +158,8 @@ export class Commander {
     this.revision++; this.nextScan = 0; this.scanPlans.clear(); this.interruptWaiting();
     this.states.expansion.queue = []; this.states.expansion.nextScanAt = null;
     this.planner.dispose();
-    this.logisticsReservations.clear(); this.logisticsReserves = { sun: new Map(), planet: new Map() }; this.upgrades.reset();
-    this.planningQuotes.clear(); this.sunPlanner.reset(); this.planetPlanner.reset(); this.nextLogistics = 0; this.frontier.reset(); this.frontierQuotes.clear(); this.meteoritePlanner = new MeteoriteFrontier(); this.meteoriteQuotes.clear(); this.nextMeteorite = 0;
+    this.logisticsReservations.clear(); this.upgrades.reset();
+    this.planningQuotes.clear(); this.resetLogistics(); this.nextLogistics = 0; this.frontier.reset(); this.frontierQuotes.clear(); this.meteoritePlanner = new MeteoriteFrontier(); this.meteoriteQuotes.clear(); this.nextMeteorite = 0;
     this.reconnectAt = Date.now() + 5000;
     this.emit('expansion', `连接或情报暂不可用，5 秒后自动尝试恢复：${error instanceof Error ? error.message : String(error)}`, 'paused');
   }
@@ -196,11 +201,11 @@ export class Commander {
       this.finishStopped();
       this.world?.dispose(); this.world = undefined; this.configs = {}; this.working = false;
       this.planner.dispose();
-      this.planningQuotes.clear(); this.sunPlanner.reset(); this.planetPlanner.reset(); this.nextLogistics = 0; this.frontier.reset(); this.frontierQuotes.clear(); this.meteoritePlanner = new MeteoriteFrontier(); this.meteoriteQuotes.clear(); this.nextMeteorite = 0;
+      this.planningQuotes.clear(); this.resetLogistics(); this.nextLogistics = 0; this.frontier.reset(); this.frontierQuotes.clear(); this.meteoritePlanner = new MeteoriteFrontier(); this.meteoriteQuotes.clear(); this.nextMeteorite = 0;
       this.reconnectAt = null; this.identity = undefined;
       this.saving = undefined; this.debits.clear(); this.pendingSources.clear(); this.pendingTargets.clear(); this.attackReservations.clear();
       this.expansionStock.clear(); this.expansionPending.clear(); this.inventoryDirty.clear(); this.expansionFleets.clear();
-      this.logisticsReservations.clear(); this.logisticsReserves = { sun: new Map(), planet: new Map() }; this.upgrades.reset();
+      this.logisticsReservations.clear(); this.upgrades.reset();
       for (const mode of modes) if (this.states[mode].running) {
         this.states[mode].running = false; this.states[mode].queue = []; this.states[mode].nextScanAt = null; this.emit(mode);
       }
@@ -252,7 +257,7 @@ export class Commander {
     const pending = this.supplies.filter(s => s.hub === hub).flatMap(s => s.deliveries).filter(s => s.arrival > Date.now());
     return { count: pending.reduce((n, s) => n + s.count, 0), arrival: Math.max(Date.now(), ...pending.map(s => s.arrival)) };
   }
-  private flightCount(mode: Mode) { return [...this.flights.values()].filter(f => f.mode === mode).length + (mode === 'attack' ? this.supplies.length : this.sunPlanner.gathering ? 1 : 0); }
+  private flightCount(mode: Mode) { return [...this.flights.values()].filter(f => f.mode === mode).length + (mode === 'attack' ? this.supplies.length : this.logistics.filter(slot => slot.planner.kind === 'sun' && slot.planner.gathering).length); }
   private planned(mode: Mode) {
     if (!this.scanPlans.delete(mode) || this.scanPlans.size) return;
     // Coverage and planning form one scan round. Receipts and draining its queue
@@ -384,7 +389,7 @@ export class Commander {
       this.tasks.set(mode, task);
     }
   }
-  private campaignPlanner(job: Assignment) { return job.campaignKind === 'planet' ? this.planetPlanner : this.sunPlanner; }
+  private campaignPlanner(job: Assignment) { return this.logistics[job.campaignSlot!].planner; }
   private fastBudgets(snapshot: WorldSnapshot) {
     const available = this.budgets(snapshot);
     for (const reserves of [this.attackReservations, this.logisticsReservations]) for (const [id, n] of reserves) available.set(id, Math.max(0, (available.get(id) ?? 0) - n));
@@ -466,40 +471,67 @@ export class Commander {
     const capacity = Math.floor(config.settings.horizonMs / config.settings.intervalMs) + 1;
     if (this.states.expansion.queue.filter(job => job.kind !== 'upgrade').length >= capacity) return;
     const invalid = new Set<Assignment>();
-    const left = spendable(snapshot), drafts = { sun: this.sunPlanner.fork(), planet: this.planetPlanner.fork() };
-    const plans = new Map<'sun' | 'planet', import('../expansion/logistics').LogisticsPlan>();
-    const locks = new Set([...this.flights.keys(), ...this.pendingTargets, ...this.states.expansion.queue.filter(job => !job.campaignKind).map(jobKey)]);
-    const hubs = new Set<bigint>();
-    for (const kind of ['sun', 'planet'] as const) {
-      const queued = this.states.expansion.queue.filter(job => job.campaignKind === kind).filter(job => {
+    const left = spendable(snapshot), drafts = this.logistics.map(slot => slot.planner.fork());
+    const plans = new Map<number, LogisticsPlan>();
+    const baseLocks = new Set([...this.flights.keys(), ...this.pendingTargets, ...this.states.expansion.queue.filter(job => !job.campaignKind).map(jobKey)]);
+    const queuedBySlot = drafts.map((_, i) => this.states.expansion.queue.filter(job => job.campaignSlot === i));
+    const remainingSuns = (locks: Set<string>) => snapshot.suns?.some(t => t.ownerId == null && inZone(t, config.policy.zone) && !locks.has(targetKey(t.sunId, 'sun')));
+    const priority = (i: number) => queuedBySlot[i].length ? 0 : drafts[i].gathering ? 1 : 2;
+    const order = drafts.map((_, i) => i).sort((a, b) => priority(a) - priority(b));
+    const sunLimit = { routes: logisticsQuoteBudget, pairs: logisticsPairBudget };
+    let noNewSun = false;
+    for (const i of order) {
+      const planner = drafts[i], kind = planner.kind;
+      const queued = queuedBySlot[i].filter(job => {
         const target = bodyFor(snapshot, job.targetId, job.targetKind);
-        const valid = job.kind === 'sun-supply' || job.kind === 'expansion-supply' ? drafts[kind].validSupply(job, snapshot, config)
-          : job.kind === 'upgrade' ? drafts[kind].validUpgrade(job, snapshot, config, left.get(job.sourceId) ?? 0)
+        const valid = job.kind === 'sun-supply' || job.kind === 'expansion-supply' ? planner.validSupply(job, snapshot, config)
+          : job.kind === 'upgrade' ? planner.validUpgrade(job, snapshot, config, left.get(job.sourceId) ?? 0)
           : !!target && target.ownerId == null && target.probeCount === job.garrison && !bodyFleetsFor(snapshot, job.targetId, job.targetKind).length;
-        if (!this.rulesCurrent(job, snapshot) || !valid || members(job).some(m => m.count > (left.get(m.sourceId) ?? 0))) { invalid.add(job); return false; }
+        if (!this.rulesCurrent(job, snapshot) || !valid || members(job).some(m => m.count > (left.get(m.sourceId) ?? 0))
+          || (job.hubBudget ?? 0) > (left.get(job.targetId) ?? 0)) { invalid.add(job); return false; }
         return true;
       });
-      const planner = drafts[kind];
-      const plan = queued.length ? { reservations: new Map(this.logisticsReserves[kind]), hub: planner.hub, sun: kind === 'sun' ? planner.target : undefined, state: this.states.expansion.logistics?.find(state => state.kind === kind) }
-        : await runPlanning(planner.steps(world, { ...snapshot, owned: snapshot.owned.filter(p => !hubs.has(p.planetId)) }, config, left, locks,
+      const hubs = new Set<bigint>(), locks = new Set(baseLocks);
+      for (const other of drafts) if (other !== planner) {
+        if (other.hub !== undefined) hubs.add(other.hub);
+        if (other.target !== undefined) locks.add(targetKey(other.target, other.kind));
+      }
+      let plan: LogisticsPlan | undefined;
+      if (queued.length) {
+        const reservations = new Map([...this.logistics[i].reserves].map(([id, n]) => [id, Math.min(n, left.get(id) ?? 0)]));
+        plan = { reservations, hub: planner.hub, sun: kind === 'sun' ? planner.target : undefined,
+          state: this.states.expansion.logistics?.find(state => state.kind === kind && state.target === planner.target) };
+      } else if (kind === 'sun' && !planner.gathering && (noNewSun || !remainingSuns(locks))) {
+        plan = { reservations: new Map() };
+      } else {
+        // Protect active projects even if their slot runs later. A shared donor
+        // may contribute its remaining stock to several distinct hubs.
+        const otherActiveSuns = order.slice(order.indexOf(i) + 1).filter(j => drafts[j].kind === 'sun' && drafts[j].gathering && !queuedBySlot[j].length).length;
+        const limit = kind === 'sun' ? { routes: Math.floor(sunLimit.routes / (1 + otherActiveSuns)), pairs: sunLimit.pairs } : undefined;
+        plan = await runPlanning(planner.steps(world, { ...snapshot, owned: snapshot.owned.filter(p => !hubs.has(p.planetId)) }, config, left, locks,
           hub => ({ percent: Math.max(0, ...this.activeConfigs().filter(c => inZone(hub, c.policy.zone)
             && snapshot.planets.some(p => hostile(p, snapshot) && distance(p, hub) <= c.policy.threatRadius)).map(c => c.policy.frontlinePercent)),
-            deficit: Math.max(0, reserveFor(hub, snapshot, this.activeConfigs()) - (snapshot.budgets.get(hub.planetId) ?? 0)) })), current, () => world.refreshQuotes?.(), yieldToFrontier);
+            deficit: Math.max(0, reserveFor(hub, snapshot, this.activeConfigs()) - (snapshot.budgets.get(hub.planetId) ?? 0)) }),
+          limit), current, () => world.refreshQuotes?.(), yieldToFrontier);
+        if (kind === 'sun') {
+          sunLimit.routes -= planner.stats.routes; sunLimit.pairs -= planner.stats.checkedPairs;
+          // An idle slot would otherwise repeat the same discovery from the start.
+          if (!planner.gathering && planner.stats.checkedPairs) noNewSun = true;
+        }
+      }
       if (!plan || !current()) return;
-      plans.set(kind, plan);
-      if (plan.hub !== undefined) hubs.add(plan.hub);
-      if (planner.target !== undefined) locks.add(`${planner.kind}:${planner.target}`);
+      plans.set(i, plan);
       for (const [id, n] of plan.reservations) left.set(id, Math.max(0, (left.get(id) ?? 0) - n));
     }
     const fresh = world.read();
     if (!current() || snapshot.identity !== fresh.identity) return;
     // Hub forecasts and all donor routes must still use their original rules.
-    for (const [kind, plan] of plans) {
+    for (const [i, plan] of plans) {
       // A fast capture may have been queued while this supply draft yielded.
       // Its destination is the campaign target, not the friendly supply hub.
-      const target = drafts[kind].target;
+      const target = drafts[i].target;
       if (target !== undefined) {
-        const key = targetKey(target, kind);
+        const key = targetKey(target, drafts[i].kind);
         if (this.flights.has(key) || this.pendingTargets.has(key)
           || this.states.expansion.queue.some(job => !job.campaignKind && jobKey(job) === key)) return;
       }
@@ -508,7 +540,7 @@ export class Commander {
     }
     const available = spendable(fresh), additions: Assignment[] = [];
     let slots = Math.max(0, capacity - this.states.expansion.queue.filter(job => !invalid.has(job) && (job.kind !== 'upgrade' || job.campaignKind)).length);
-    for (const [kind, plan] of plans) {
+    for (const [i, plan] of plans) {
       let job = plan.job;
       if (job && slots <= 0) {
         // Keep the campaign, but release donors for a batch outside this queue window.
@@ -517,18 +549,17 @@ export class Commander {
       }
       if (job) {
         if (this.states.expansion.queue.some(queued => !invalid.has(queued) && jobKey(queued) === jobKey(job)) || this.flights.has(jobKey(job)) || this.pendingTargets.has(jobKey(job))) return;
-        if (job.kind === 'sun-supply' || job.kind === 'expansion-supply') { if (!drafts[kind].validSupply(job, fresh, config)) return; }
-        else if (job.kind === 'upgrade') { if (!drafts[kind].validUpgrade(job, fresh, config, available.get(job.sourceId) ?? 0)) return; }
+        if (job.kind === 'sun-supply' || job.kind === 'expansion-supply') { if (!drafts[i].validSupply(job, fresh, config)) return; }
+        else if (job.kind === 'upgrade') { if (!drafts[i].validUpgrade(job, fresh, config, available.get(job.sourceId) ?? 0)) return; }
         else if (fingerprint(bodyFor(snapshot, job.targetId, job.targetKind)) !== fingerprint(bodyFor(fresh, job.targetId, job.targetKind)) || fleetState(snapshot, job) !== fleetState(fresh, job)) return;
       }
       for (const [id, n] of plan.reservations) {
         if (n > (available.get(id) ?? 0)) return;
         available.set(id, available.get(id)! - n);
       }
-      if (job) { job.quoteRules = jobQuoteRules(fresh, job); additions.push(job); slots--; }
+      if (job) { job.campaignSlot = i; job.quoteRules = jobQuoteRules(fresh, job); additions.push(job); slots--; }
     }
-    this.sunPlanner = drafts.sun; this.planetPlanner = drafts.planet;
-    this.logisticsReserves = { sun: plans.get('sun')!.reservations, planet: plans.get('planet')!.reservations };
+    this.logistics = drafts.map((planner, i) => ({ planner, reserves: plans.get(i)!.reservations }));
     const reserves = new Map<bigint, number>();
     for (const plan of plans.values()) for (const [id, n] of plan.reservations) reserves.set(id, (reserves.get(id) ?? 0) + n);
     this.logisticsReservations = reserves;
@@ -538,11 +569,10 @@ export class Commander {
       this.expansionQuoteVersion = fresh.quoteVersion;
     }
     this.states.expansion.logistics = [...plans.values()].flatMap(plan => plan.state ? [plan.state] : []);
-    const sun = plans.get('sun')!;
-    this.states.expansion.sun = sun.sun !== undefined ? { target: sun.sun, hub: sun.hub, waiting: sun.waiting } : undefined;
-    this.states.expansion.work = { ...this.states.expansion.work, logisticsMs: performance.now() - started,
-      logisticsRoutes: drafts.sun.stats.routes + drafts.planet.stats.routes, logisticsReused: drafts.sun.stats.reused + drafts.planet.stats.reused };
-    this.emit('expansion', additions.length ? `后勤计划增量更新：新增 ${additions.length} 项；原生航路新算 ${drafts.sun.stats.routes + drafts.planet.stats.routes} 条` : undefined,
+    this.states.expansion.suns = [...plans.values()].flatMap(p => p.sun === undefined ? [] : [{ target: p.sun, hub: p.hub, waiting: p.waiting }]);
+    const routes = drafts.reduce((sum, p) => sum + p.stats.routes, 0), reused = drafts.reduce((sum, p) => sum + p.stats.reused, 0);
+    this.states.expansion.work = { ...this.states.expansion.work, logisticsMs: performance.now() - started, logisticsRoutes: routes, logisticsReused: reused };
+    this.emit('expansion', additions.length ? `后勤计划增量更新：新增 ${additions.length} 项；原生航路新算 ${routes} 条` : undefined,
       additions.length ? 'queued' : undefined);
   }
   private async updateFrontier(config: ModeConfig, signal: AbortSignal) {
@@ -838,11 +868,16 @@ export class Commander {
           const contributions = members(job), sourceIds = new Set(contributions.map(m => m.sourceId));
           if (job.kind === 'sun-supply' || job.kind === 'expansion-supply') sourceIds.add(job.targetId);
           const available = this.budgets(fresh, sourceIds);
-          if ((job.kind === 'sun-supply' || job.kind === 'expansion-supply') && (available.get(job.targetId) ?? 0) - (this.attackReservations.get(job.targetId) ?? 0) < (job.hubBudget ?? 0)) return skip('中转星实际库存不足计划所需');
+          const ownReserves = job.campaignKind ? this.logistics[job.campaignSlot!].reserves : undefined;
+          if (job.kind === 'sun-supply' || job.kind === 'expansion-supply') {
+            const otherHolds = Math.max(0, (this.logisticsReservations.get(job.targetId) ?? 0) - (ownReserves?.get(job.targetId) ?? 0));
+            if ((available.get(job.targetId) ?? 0) - (this.attackReservations.get(job.targetId) ?? 0) - otherHolds < (job.hubBudget ?? 0)) return skip('中转星实际库存不足计划所需');
+          }
           for (const m of contributions) {
             if (!fresh.owned.some(p => p.planetId === m.sourceId && inZone(p, config.policy.zone))) return skip(`来源 #${m.sourceId} 已失去所有权或不在战区内`);
+            const own = ownReserves?.get(m.sourceId) ?? 0;
             const left = Math.max(0, (available.get(m.sourceId) ?? 0) - (this.attackReservations.get(m.sourceId) ?? 0)
-              - Math.max(0, (this.logisticsReservations.get(m.sourceId) ?? 0) - (job.campaignKind ? m.count : 0)));
+              - Math.max(0, (this.logisticsReservations.get(m.sourceId) ?? 0) - Math.min(m.count, own)));
             if (m.count > left) return skip(`来源 #${m.sourceId} 共享可用兵力不足：需 ${m.count}，可用 ${left}`);
           }
           return () => {
@@ -857,7 +892,7 @@ export class Commander {
               this.campaignPlanner(job).launched(job, fresh); this.logisticsRevision++; this.nextLogistics = 0;
               for (const m of contributions) {
                 this.logisticsReservations.set(m.sourceId, Math.max(0, (this.logisticsReservations.get(m.sourceId) ?? 0) - m.count));
-                const reserved = this.logisticsReserves[job.campaignKind]; reserved.set(m.sourceId, Math.max(0, (reserved.get(m.sourceId) ?? 0) - m.count));
+                const reserved = this.logistics[job.campaignSlot!].reserves; reserved.set(m.sourceId, Math.max(0, (reserved.get(m.sourceId) ?? 0) - m.count));
               }
             }
             if (job.kind === 'sun-supply' || job.kind === 'expansion-supply') {

@@ -1,3 +1,4 @@
+import { nearbyCaptureWindow } from './nearby-capture';
 import { fleetsFor, type ExpansionWorld, type WorldSnapshot } from './world';
 import type { ModeConfig } from '../commander/types';
 import { inZone } from '../commander/types';
@@ -40,6 +41,20 @@ export class FrontierPlanner {
       && !locked.has(p.planetId) && neutralRemaining(p, snapshot, Infinity) !== null));
     const risk = riskEvaluator(snapshot, config), visited = new Set<bigint>(), jobs: Assignment[] = [];
     let evaluated = 0, evaluations = 0;
+    let incompleteForecast = false;
+    const localWait = nearbyCaptureWindow(snapshot, config.settings, (source, radius) => index.near(source, radius),
+      p => !locked.has(p.planetId) && (!config.settings.cautiousExpansion || risk(p) !== 'exposed'),
+      (source, target) => {
+        if (evaluations >= 96) { incompleteForecast = true; return {}; }
+        evaluations++;
+        return { route: world.route?.(source.planetId, target.planetId), count: world.quote(source.planetId, target.planetId)?.count };
+      });
+    const byId = new Map(sources.map(p => [p.planetId, p]));
+    const canSpend = (job: Assignment) => {
+      const eta = completionMs(job);
+      const held = members(job).some(m => localWait(byId.get(m.sourceId)!, available.get(m.sourceId) ?? 0, m.count, eta, job.targetId, locked));
+      return !held && !incompleteForecast;
+    };
     for (const source of candidates) {
       yield;
       const id = source.planetId;
@@ -103,9 +118,9 @@ export class FrontierPlanner {
             yield;
             options.push(...coalitionOptions(target, group, { ...config.settings, horizonMs: config.settings.maxTravelMs }));
           }
-          job = options.sort((a, b) => completionMs(a) - completionMs(b) || members(a).length - members(b).length || totalCount(a) - totalCount(b))[0] ?? null;
+          job = options.filter(canSpend).sort((a, b) => completionMs(a) - completionMs(b) || members(a).length - members(b).length || totalCount(a) - totalCount(b))[0] ?? null;
         }
-        if (!job) continue;
+        if (!job || !canSpend(job)) continue;
         jobs.push({ ...job, reason: job.support?.length ? '前线快速合兵：附近来源协同占领' : '前线快速补充：附近可占领目标' });
         locked.add(target.planetId);
         for (const m of members(job)) available.set(m.sourceId, (available.get(m.sourceId) ?? 0) - m.count);

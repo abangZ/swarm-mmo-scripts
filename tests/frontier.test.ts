@@ -89,7 +89,7 @@ test('nearby 435 and 230 probes capture a 644-probe neutral through the fast coa
   const jobs = plan();
   assert.equal(jobs.length, 1); assert.equal(jobs[0].targetId, 2n);
   assert.equal(members(jobs[0]).length, 2);
-  assert.equal(members(jobs[0]).reduce((sum, m) => sum + m.count, 0), 646);
+  assert.equal(members(jobs[0]).reduce((sum, m) => sum + m.count, 0), 645);
   for (const m of members(jobs[0])) assert.ok(m.count <= f.snapshot.budgets.get(m.sourceId)!);
 });
 
@@ -139,7 +139,7 @@ test('a distant rich anchor compares faster sources near the target before locki
     f.snapshot.owned.push(left, right); f.snapshot.planets.push(left, right);
     f.snapshot.budgets = new Map([[1n, 2000], [3n, 464], [4n, 396]]); f.snapshot.attackMultiplierUpperBound = 1;
     f.world.launchGroup = async () => {};
-    f.world.quote = source => source === 1n ? { count: 785, travelMs: 300000 } : null;
+    f.world.quote = source => source === 1n ? { count: 784, travelMs: 300000 } : null;
     const routes = t.mock.fn((source: bigint) => ({ travelMs: source === 1n ? 300000 : source === 3n ? 10000 : 11000, lossPct: restricted ? 50 : 0 }));
     f.world.route = routes;
     const config = { settings: defaults, policy: defaultPolicy };
@@ -148,6 +148,6 @@ test('a distant rich anchor compares faster sources near the target before locki
     const jobs = plan(); assert.equal(jobs.length, 1);
     assert.deepEqual(members(jobs[0]).map(m => m.sourceId), restricted ? [1n] : [3n, 4n]);
     assert.ok(routes.mock.callCount() <= 96);
-    if (!restricted) assert.equal(members(jobs[0]).reduce((n, m) => n + m.count, 0), 785);
+    if (!restricted) assert.equal(members(jobs[0]).reduce((n, m) => n + m.count, 0), 784);
   }
 });

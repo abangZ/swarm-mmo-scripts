@@ -12,7 +12,7 @@ import { unresolved } from '../src/runtime/operations';
 const settings = { ...defaults, maxSources: 10 };
 function world(size = 10) {
   const f = coalitionWorld(size);
-  f.target.probeCount = size * 2 - 2;
+  f.target.probeCount = size * 2 - 1;
   f.snapshot.owned.forEach((p, i) => { p.positionX = i % 4; p.positionY = Math.floor(i / 4); f.snapshot.budgets.set(p.planetId, 2); });
   return f;
 }
@@ -33,7 +33,7 @@ test('ten-source allocations respect every toll and budget, and the planner acce
   assert.ok(options.length > 0 && options.length <= 8);
   for (const job of options) {
     assert.equal(members(job).length, 10);
-    assert.equal(members(job).reduce((n, m) => n + arriving(m.count, 50), 0), f.target.probeCount + 2);
+    assert.equal(members(job).reduce((n, m) => n + arriving(m.count, 50), 0), f.target.probeCount + 1);
     assert.ok(members(job).every(m => m.count <= 4));
   }
   assert.equal(coalitionOptions(f.target, sources, { ...settings, maxSources: 9 }).length, 0);

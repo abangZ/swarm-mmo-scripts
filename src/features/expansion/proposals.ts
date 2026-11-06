@@ -1,6 +1,7 @@
+import { nearbyCaptureWindow } from './nearby-capture';
 import type { ExpansionWorld, WorldSnapshot } from './world';
 import { fleetsFor } from './world';
-import { captureMargin, members, type Assignment, type ExpansionSettings } from './types';
+import { captureMargin, completionMs, members, type Assignment, type ExpansionSettings } from './types';
 import { coalitionOptions, cooperationGroups, cooperationRadius, validRoute, type GroupSource } from './cooperation';
 import type { Planet } from '../../game/types';
 import type { ModeConfig } from '../commander/types';
@@ -16,9 +17,9 @@ import { sourceQuoteRules } from './quote-rules';
 /** Unknown/conflicting fleets remain locked. Only our known same-galaxy waves get deficit top-ups. */
 export function neutralRemaining(target: Planet, snapshot: WorldSnapshot, travelMs: number): number | null {
   const fleets = fleetsFor(snapshot, target.planetId);
-  if (!fleets.length) return snapshot.incoming.has(target.planetId) ? null : target.probeCount + 1 + captureMargin;
+  if (!fleets.length) return snapshot.incoming.has(target.planetId) ? null : target.probeCount + captureMargin;
   if (fleets.some(f => f.owner !== snapshot.identity || f.arriving === null || f.arrival === null || f.arrival > Date.now() + travelMs)) return null;
-  const remaining = target.probeCount + 1 + captureMargin - fleets.reduce((n, f) => n + f.arriving!, 0);
+  const remaining = target.probeCount + captureMargin - fleets.reduce((n, f) => n + f.arriving!, 0);
   return remaining > 0 ? remaining : null;
 }
 export function expansionQuote(world: ExpansionWorld, snapshot: WorldSnapshot, source: Planet, target: Planet, config: ModeConfig): Assignment | null {
@@ -61,6 +62,8 @@ export function* expansionProposalSteps(world: ExpansionWorld, snapshot: WorldSn
     && (!settings.cautiousExpansion || !exposed.has(p.planetId)));
   const allIndex = new PlanetIndex(neutrals);
   const index = new PlanetIndex(targets), frontier = new Map<bigint, number>();
+  const localWait = nearbyCaptureWindow(snapshot, settings, (source, radius) => index.near(source, radius), () => true,
+    (source, target) => ({ route: world.route?.(source.planetId, target.planetId), count: world.quote(source.planetId, target.planetId)?.count }));
   const opportunity = (p: Planet) => {
     if (!frontier.has(p.planetId)) frontier.set(p.planetId, Math.min(10, index.near(p, Math.min(settings.radius, 8)).filter(q => q.planetId !== p.planetId && q.probeCount <= p.probeCount + 10).length));
     return frontier.get(p.planetId)!;
@@ -79,7 +82,7 @@ export function* expansionProposalSteps(world: ExpansionWorld, snapshot: WorldSn
   const ranked = index.ordered().filter(p => reachable.has(p.planetId));
   for (const [i, target] of ranked.entries()) { opportunity(target); if (i % 16 === 0) yield; }
   const staticOrders: Planet[][] = [];
-  for (const rank of [(p: Planet) => p.probeCount, (p: Planet) => -(p.level ?? 1) / (p.probeCount + 1 + captureMargin), (p: Planet) => -opportunity(p)]) {
+  for (const rank of [(p: Planet) => p.probeCount, (p: Planet) => -(p.level ?? 1) / (p.probeCount + captureMargin), (p: Planet) => -opportunity(p)]) {
     staticOrders.push(bestCandidates(ranked, ranked.length, rank));
     yield;
   }
@@ -189,13 +192,27 @@ export function* expansionProposalSteps(world: ExpansionWorld, snapshot: WorldSn
       edges.push(...coalitionOptions(target, group, { ...settings, horizonMs: settings.maxTravelMs }).map(job => ({ ...job, value: value(target, Math.max(job.travelMs, ...(job.support ?? []).map(m => m.travelMs))) })));
     }
   }
+  const sourcesById = new Map(sources.map(source => [source.planetId, source]));
+  const waiting = new Map<bigint, bigint>();
+  const accepted: Assignment[] = [];
   const ready = new Set<bigint>();
-  for (const [i, job] of edges.entries()) {
-    if (i % 128 === 0) yield;
-    for (const m of members(job)) ready.add(m.sourceId);
+  for (const job of edges) {
+    yield;
+    const eta = completionMs(job);
+    const contributors = members(job);
+    if (contributors.some(member => {
+      const prospect = localWait(sourcesById.get(member.sourceId)!, budgets.get(member.sourceId) ?? 0, member.count, eta, job.targetId);
+      if (prospect) waiting.set(member.sourceId, prospect.target);
+      return !!prospect;
+    })) continue;
+    accepted.push(job);
+    for (const m of contributors) ready.add(m.sourceId);
   }
-  for (const report of reports) if (ready.has(report.sourceId)) report.reason = '可出兵；当前目标优先分给更快来源或受剩余预算限制';
-  return { edges, candidates: seen.size, sources: reports, readySources: ready.size, exposed: exposed.size,
+  for (const report of reports) {
+    if (ready.has(report.sourceId)) report.reason = '可出兵；当前目标优先分给更快来源或受剩余预算限制';
+    else if (waiting.has(report.sourceId)) report.reason = `为附近 #${waiting.get(report.sourceId)} 保留兵力，预计更早占领`;
+  }
+  return { edges: accepted, candidates: seen.size, sources: reports, readySources: ready.size, exposed: exposed.size,
     ...(search?.deferredSources ? { deferredSources: search.deferredSources } : {}) };
 }
 

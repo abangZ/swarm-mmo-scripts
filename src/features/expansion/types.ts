@@ -18,7 +18,7 @@ export function validateSettings(s: ExpansionSettings): void {
 export interface Contribution { sourceId: bigint; count: number; travelMs: number; lossPct?: number }
 export type TargetKind = 'planet' | 'sun' | 'comet';
 export interface Assignment extends Contribution { targetId: bigint; targetKind?: TargetKind; support?: Contribution[]; value?: number; kind?: 'reinforce' | 'sun-supply' | 'expansion-supply' | 'upgrade';
-  sunId?: bigint; hubBudget?: number; expectedLevel?: number; campaignKind?: 'planet' | 'sun'; campaignTargetId?: bigint; garrison?: number; expiresAt?: number; reason?: string; quoteRules?: string }
+  campaignSlot?: number; sunId?: bigint; hubBudget?: number; expectedLevel?: number; campaignKind?: 'planet' | 'sun'; campaignTargetId?: bigint; garrison?: number; expiresAt?: number; reason?: string; quoteRules?: string }
 export function targetKey(targetId: bigint, kind: TargetKind = 'planet'): string { return `${kind}:${targetId}`; }
 export function jobKey(job: Assignment): string { return targetKey(job.targetId, job.targetKind); }
 export function targetLabel(job: Pick<Assignment, 'targetId' | 'targetKind'>): string { return `${job.targetKind === 'sun' ? '恒星' : job.targetKind === 'comet' ? '陨石' : '星球'} #${job.targetId}`; }

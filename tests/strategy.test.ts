@@ -76,8 +76,8 @@ test('fixed zone bounds both source and target; foreign or own fleets block enem
   assert.equal(inZone(planet(9n, 8, 0), c.policy.zone), true);
 });
 
-test('capture margin survives a 90 percent border loss and invalid routes fail closed', () => {
-  assert.deepEqual(safeQuote({ travelMs: 1000, lossPct: 90, outOfRange: false, exact: { reason: 'capture', probes: 20 } }), { count: 30, travelMs: 1000 });
+test('native capture cost already includes a 90 percent border loss and invalid routes fail closed', () => {
+  assert.deepEqual(safeQuote({ travelMs: 1000, lossPct: 90, outOfRange: false, exact: { reason: 'capture', probes: 20 } }), { count: 20, travelMs: 1000 });
   for (const lossPct of [100, NaN, -1]) assert.equal(safeQuote({ travelMs: 1, lossPct, outOfRange: false, exact: { reason: 'capture', probes: 20 } }), null);
 });
 
@@ -85,7 +85,7 @@ test('neutral top-ups use a confirmed arrival lower bound and ignore conflicted 
   const f = intelligence(), c = config(); f.target.ownerId = undefined;
   f.snapshot.incoming.add(2n);
   f.snapshot.fleets = [{ id: 1n, owner: 'me', target: 2n, count: 10, arriving: 10, arrival: Date.now() + 500 }];
-  assert.equal(expansionQuote(f.world, f.snapshot, f.source, f.target, c)?.count, 12);
+  assert.equal(expansionQuote(f.world, f.snapshot, f.source, f.target, c)?.count, 11);
   f.snapshot.fleets[0].arriving = null;
   assert.equal(expansionQuote(f.world, f.snapshot, f.source, f.target, c), null);
   const other = planet(3n, 3, 0); f.snapshot.planets.push(other); c.settings.candidates = 1;

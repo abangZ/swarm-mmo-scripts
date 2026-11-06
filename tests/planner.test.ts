@@ -32,11 +32,11 @@ test('two and three nearby planets can jointly capture with one arriving probe o
   const triple = coalitionOptions(target, sources, defaults);
   assert.ok(triple.length > 0);
   for (const job of triple) {
-    assert.equal(members(job).length, 3); assert.equal(totalCount(job), 12);
+    assert.equal(members(job).length, 3); assert.equal(totalCount(job), 11);
     assert.ok(members(job).every(m => m.count <= 5 && m.count > 0));
   }
   const pair = coalitionOptions(target, sources.slice(0, 2).map(s => ({ ...s, available: 8 })), defaults);
-  assert.ok(pair.length > 0); assert.equal(totalCount(pair[0]), 12);
+  assert.ok(pair.length > 0); assert.equal(totalCount(pair[0]), 11);
   assert.equal(coalitionOptions(target, sources, { ...defaults, maxSources: 2 }).length, 0);
 });
 test('group budgets include each fleet toll, source proximity and arrival spread', () => {
@@ -45,7 +45,7 @@ test('group budgets include each fleet toll, source proximity and arrival spread
     .map(planet => ({ planet, available: 14, travelMs: 10000, lossPct: 50 }));
   const plans = coalitionOptions(target, sources, defaults);
   assert.ok(plans.length > 0);
-  for (const plan of plans) assert.equal(members(plan).reduce((sum, m) => sum + arriving(m.count, 50), 0), 12);
+  for (const plan of plans) assert.equal(members(plan).reduce((sum, m) => sum + arriving(m.count, 50), 0), 11);
   assert.equal(coalitionOptions(target, sources.map(s => ({ ...s, available: 11 })), defaults).length, 0);
   assert.equal(coalitionOptions(target, [sources[0], { ...sources[1], travelMs: 25001 }], defaults).length, 0);
   assert.equal(coalitionOptions(target, [sources[0], { ...sources[1], planet: planet(2n, 9, 0, true) }], defaults).length, 0);

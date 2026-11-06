@@ -1,9 +1,9 @@
 import { assertSession, getAutomationSession, ownedPlanets } from './session';
 import { subscribe } from './subscriptions';
 import type { ExpansionWorld, WorldSnapshot, Fleet } from '../features/expansion/world';
-import { maxUpgradeBatch, captureMargin, members, targetKey, type Assignment, type ExpansionSettings, type TargetKind } from '../features/expansion/types';
+import { maxUpgradeBatch, members, targetKey, type Assignment, type ExpansionSettings, type TargetKind } from '../features/expansion/types';
 import type { Subscription, AutomationSession, Quote } from './types';
-import { validRoute, arriving, type Route } from '../features/expansion/cooperation';
+import { validRoute, type Route } from '../features/expansion/cooperation';
 import { inZone, type ModeConfig } from '../features/commander/types';
 import { subscriptionBatches } from './subscription-batches';
 import { ProductionTicks } from './economy';
@@ -12,8 +12,9 @@ import { fingerprint } from '../shared/fingerprint';
 export function safeQuote(quote: ReturnType<AutomationSession['map']['quoteSend']>): { count: number; travelMs: number } | null {
   if (!quote || quote.outOfRange || quote.exact?.reason !== 'capture') return null;
   if (!validRoute(quote)) return null;
-  const count = Math.max(quote.exact.probes + captureMargin, Math.ceil((arriving(quote.exact.probes, quote.lossPct) + captureMargin) * 100 / (100 - quote.lossPct)));
-  if (!Number.isSafeInteger(quote.exact.probes) || quote.exact.probes < 1 || count > 0xffffffff || !Number.isFinite(quote.travelMs) || quote.travelMs < 0) return null;
+  // The native capture quote already includes the winning probe and any travel loss.
+  const count = quote.exact.probes;
+  if (!Number.isSafeInteger(count) || count < 1 || count > 0xffffffff) return null;
   return { count, travelMs: quote.travelMs };
 }
 export class GameWorld implements ExpansionWorld {
@@ -220,13 +221,7 @@ export class GameWorld implements ExpansionWorld {
   }
   supportsGroup() { return typeof this.session.conn.reducers.launchSwarmBulk === 'function'; }
   quoteBody(source: bigint, target: bigint, kind: 'sun' | 'comet') {
-    const quote = this.nativeQuote(source, target, kind);
-    if (kind === 'comet') return safeQuote(quote);
-    // A sun fights in whole super-probes. The native exact send already includes
-    // the winning super-probe, Conversion and border loss; +1 raw probe is trimmed.
-    if (!quote || !validRoute(quote) || quote.outOfRange || quote.exact?.reason !== 'capture'
-      || !Number.isSafeInteger(quote.exact.probes) || quote.exact.probes < 1 || quote.exact.probes > 0xffffffff) return null;
-    return { count: quote.exact.probes, travelMs: quote.travelMs };
+    return safeQuote(this.nativeQuote(source, target, kind));
   }
   bodyQuoteIssue(source: bigint, target: bigint, kind: 'sun' | 'comet') {
     const quote = this.nativeQuote(source, target, kind);

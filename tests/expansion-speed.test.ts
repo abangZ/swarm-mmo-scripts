@@ -194,7 +194,7 @@ test('nearby affordable targets are evaluated before distant cheap/frontier samp
   const far = Array.from({ length: 30 }, (_, i) => ({ ...planet(BigInt(100 + i), 30 + i / 10, 0), probeCount: 1 }));
   f.snapshot.planets = [f.source, ...far, ...near];
   const targets = new Map(f.snapshot.planets.map(p => [p.planetId, p]));
-  f.world.quote = (_source, id) => ({ count: targets.get(id)!.probeCount + 2, travelMs: targets.get(id)!.positionX * 40000 });
+  f.world.quote = (_source, id) => ({ count: targets.get(id)!.probeCount + 1, travelMs: targets.get(id)!.positionX * 40000 });
   const result = expansionProposals(f.world, f.snapshot, { settings: { ...defaults, radius: 48, maxSources: 1 }, policy: defaultPolicy }, f.snapshot.budgets, new Set());
   assert.deepEqual(result.edges.map(j => j.targetId), near.slice(0, 10).map(p => p.planetId));
 });
