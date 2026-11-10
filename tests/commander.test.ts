@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { Commander } from '../src/features/commander/engine';
 import { defaults } from '../src/features/expansion/types';
 import { defaultPolicy, type ModeConfig } from '../src/features/commander/types';
-import { fakeWorld, planet, settle } from './helpers/fixtures';
+import { fakeWorld, fixture as gameFixture, planet, settle } from './helpers/fixtures';
 import { unresolved, withControl } from '../src/runtime/operations';
 import { planAttack } from '../src/features/attack/planner';
 import { reserveFor } from '../src/features/commander/safety';
@@ -33,6 +33,22 @@ test('attack consumes its planned queue without empire replanning and refreshes 
   assert.equal(plans.mock.callCount(), 1);
   assert.equal(f.snapshot.budgets.get(1n), 1);
   f.commander.stop(); t.mock.timers.tick(500); await run;
+});
+
+test('planet menu reads only the current session and follows queued, submitted and stopped attacks', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
+  const f = fixture(false), { session } = gameFixture(f.snapshot.planets);
+  f.world.matchesSession = menu => menu.conn === session.conn;
+  localStorage.setItem('swarm-helper-last-attack-operation-v1', String(Date.now()));
+  const run = f.commander.start('attack', config()); await settle();
+  assert.match(f.commander.planetPlan(session, 9n).join(), /进攻 · 待执行 · #1 派 24 探针进攻本星/);
+  assert.match(f.commander.planetPlan(session, 1n).join(), /派 24 探针进攻星球 #9/);
+  assert.deepEqual(f.commander.planetPlan(gameFixture([]).session, 9n), ['等待当前游戏连接的规划']);
+  assert.deepEqual(f.commander.planetPlan({ ...session, identity: 'other' }, 9n), ['等待当前游戏连接的规划']);
+  t.mock.timers.tick(1000); await settle();
+  assert.match(f.commander.planetPlan(session, 9n).join(), /进攻 · 已提交.*待核实占领/);
+  f.commander.stop(); t.mock.timers.tick(500); await run;
+  assert.deepEqual(f.commander.planetPlan(session, 9n), ['自动扩张和进攻均未运行']);
 });
 
 test('an invalid or more expensive queued attack releases its allocation without consuming other jobs', async t => {

@@ -1,4 +1,4 @@
-import type { Planet, Sun, Meteorite } from '../../game/types';
+import type { Planet, Sun, Meteorite, Session } from '../../game/types';
 import { targetKey, type Assignment, type ExpansionSettings, type TargetKind } from './types';
 import type { Route } from './cooperation';
 import { distance } from '../../shared/distance';
@@ -31,7 +31,9 @@ export interface WorldSnapshot {
   allies?: Set<string>;
   fleets?: Fleet[];
   fleetsByTarget?: Map<bigint, Fleet[]>;
+  /** Native forwarding owns these sources; native upgrading does not block launches. */
   automated?: Set<bigint>;
+  autoUpgrading?: Set<bigint>;
   intelligence?: boolean;
   players?: Map<string, string>;
   suns?: Sun[];
@@ -49,6 +51,7 @@ export function fleetsFor(snapshot: WorldSnapshot, target: bigint): Fleet[] {
 }
 export interface WorldDiagnostics { readTotalMs?: number; readCalls?: number; ownedBodiesMs?: number; quoteMaxMs?: number; slowQuotes?: number; syncCalls?: number; syncQueries?: number; syncTotalMs?: number; syncActive?: number; readMs: number; scanMs: number; syncMs: number; quoteMs: number; quoteCalls: number; newSubscriptions: number; reusedSubscriptions: number }
 export interface ExpansionWorld {
+  matchesSession?(session: Session): boolean;
   diagnostics?(): WorldDiagnostics;
   scan(settings: ExpansionSettings, alive: () => boolean): Promise<void>;
   configure?(configs: ModeConfig[]): void;
@@ -66,6 +69,7 @@ export interface ExpansionWorld {
   launchBody?(job: Assignment): Promise<void>;
   upgradeMany?(planetIds: bigint[]): Promise<void>;
   upgrade?(planetId: bigint): Promise<void>;
+  disableAutoUpgrade?(planetId: bigint): Promise<void>;
   syncInventory?(sources: bigint[]): Promise<void>;
   dispose(): void;
 }

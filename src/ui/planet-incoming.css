@@ -1,6 +1,6 @@
 :host { pointer-events: none; }
 .incoming { position: fixed; box-sizing: border-box; width: 270px; max-width: calc(100vw - 16px); padding: 11px 13px; border: 1px solid #7dd3fc55; border-radius: 10px; background: #090f1deb; box-shadow: 0 5px 20px #0006; color: #e5edf6; font: 13px/1.6 system-ui, sans-serif; pointer-events: none; }
-header { display: flex; justify-content: space-between; margin-bottom: 5px; font-weight: 600; }
+header { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 5px; font-weight: 600; }
 small, footer { color: #99a9bc; font-size: 11px; font-weight: 400; }
 .incoming > div { display: flex; gap: 6px; align-items: baseline; }
 strong { margin-left: auto; font-variant-numeric: tabular-nums; }
@@ -12,5 +12,6 @@ footer { margin-top: 7px; }
 button { pointer-events: auto; width: 100%; padding: 6px 10px; border: 1px solid #7dd3fc66; border-radius: 6px; background: #203a50; color: #c7ecff; font: inherit; cursor: pointer; }
 button:hover { background: #2b4c68; }
 button:focus-visible { outline: 2px solid #81ceff; outline-offset: 2px; }
-.incoming-idle { width: 32px; padding: 0; border: 0; background: none; box-shadow: none; }
+.planet-plans { list-style: none; padding: 0; margin: 3px 0 5px; max-height: min(24vh, 9em); overflow-y: auto; overflow-wrap: anywhere; pointer-events: auto; overscroll-behavior: contain; }
+.planet-plans li + li { margin-top: 4px; }
 .query-icon { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border-radius: 50%; border-color: #7dd3fc44; background: #101a29cc; color: #a7c5d8; }

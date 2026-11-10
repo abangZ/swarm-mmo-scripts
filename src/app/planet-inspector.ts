@@ -1,7 +1,7 @@
 import { readPlanetMenu, type PlanetMenu } from '../game/planet-menu';
 import { watchIncoming, type IncomingState } from '../game/incoming-fleets';
 
-export interface InspectorSnapshot { menu: PlanetMenu; incoming: IncomingState | { status: 'idle' } }
+export interface InspectorSnapshot { menu: PlanetMenu; plan: string[]; incoming: IncomingState | { status: 'idle' } }
 const sameTarget = (a: PlanetMenu, b: PlanetMenu) => a.conn === b.conn && a.identity === b.identity && a.planetId === b.planetId;
 export class PlanetInspector {
   private snapshot: InspectorSnapshot | null = null;
@@ -10,7 +10,7 @@ export class PlanetInspector {
   private timer?: ReturnType<typeof setInterval>;
   private lastRead = 0;
   private disposed = false;
-  constructor(private readMenu = readPlanetMenu, private watch = watchIncoming) {}
+  constructor(private readPlan: (menu: PlanetMenu) => string[], private readMenu = readPlanetMenu, private watch = watchIncoming) {}
   getSnapshot = () => this.snapshot;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   start() { if (!this.disposed && !this.timer) { this.refresh(); this.timer = setInterval(this.refresh, 250); } }
@@ -23,7 +23,7 @@ export class PlanetInspector {
     this.watcher?.dispose();
     this.watcher = this.watch(current.menu.conn, current.menu.identity, current.menu.planetId);
     this.lastRead = Date.now();
-    this.snapshot = { menu: current.menu, incoming: this.watcher.read() };
+    this.snapshot = { ...current, incoming: this.watcher.read() };
     this.emit();
   };
   refresh = () => {
@@ -41,8 +41,9 @@ export class PlanetInspector {
     const read = !!this.watcher && (!old || old.incoming.status === 'loading' || Date.now() - this.lastRead >= 1000);
     const incoming: InspectorSnapshot['incoming'] = read ? this.watcher!.read() : changed ? { status: 'idle' } : old.incoming;
     if (read) this.lastRead = Date.now();
-    if (changed || JSON.stringify([old?.menu.bounds, old?.menu.zIndex, old?.incoming]) !== JSON.stringify([menu.bounds, menu.zIndex, incoming])) {
-      this.snapshot = { menu, incoming }; this.emit();
+    const plan = this.readPlan(menu);
+    if (changed || JSON.stringify([old?.menu.bounds, old?.menu.zIndex, old?.incoming, old?.plan]) !== JSON.stringify([menu.bounds, menu.zIndex, incoming, plan])) {
+      this.snapshot = { menu, incoming, plan }; this.emit();
     }
   };
   private emit() { for (const listener of this.listeners) listener(); }

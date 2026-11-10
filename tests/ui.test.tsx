@@ -386,3 +386,31 @@ test('peaceful mode preserves expansion preferences, starts only manually and pe
   assert.equal(restored.state.expansion.running, false);
   restored.dispose();
 });
+
+
+test('short repeated global plans keep the main action, badge and progress rows stable', async t => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: 100000 });
+  const host = document.createElement('div'), root = createRoot(host);
+  const base = { ...idleState(), running: true, activity: 'waiting' as const, phase: '等待陨石', work: {} };
+  const render = (plan?: { startedAt: number; stage: string }) => act(async () => root.render(<RunStatus state={{ ...base, work: { plan } }} peaceful uncertain={false} />));
+  try {
+    await render();
+    const text = host.querySelector('#auto-status')!.textContent;
+    const badge = host.querySelector('.status-badge')!.textContent;
+    const rows = [...host.querySelector('.expansion-progress')!.children];
+    for (let i = 0; i < 3; i++) {
+      await render({ startedAt: Date.now(), stage: '检查后方升级' });
+      assert.equal(host.querySelector('#auto-status')!.textContent, text);
+      assert.equal(host.querySelector('.status-badge')!.textContent, badge);
+      await act(async () => t.mock.timers.tick(100));
+      await render();
+      assert.deepEqual([...host.querySelector('.expansion-progress')!.children], rows);
+    }
+    await render({ startedAt: Date.now(), stage: '检查后方升级' });
+    await act(async () => t.mock.timers.tick(3000));
+    assert.match(host.querySelector('#auto-status')!.textContent!, /正在检查后方升级/);
+    assert.equal(host.querySelector('.status-badge')!.textContent, '规划中');
+    await act(async () => root.render(<RunStatus state={{ ...base, running: false, activity: 'stopped', phase: '已停止' }} uncertain={false} />));
+    assert.equal(host.querySelector('#auto-status')!.textContent, '已停止');
+  } finally { await act(async () => root.unmount()); }
+});

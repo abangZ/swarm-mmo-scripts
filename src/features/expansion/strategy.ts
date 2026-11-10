@@ -66,14 +66,14 @@ export class StableUpgrades {
     const owned = new Set(snapshot.owned.map(p => p.planetId));
     for (const id of this.safeSince.keys()) if (!owned.has(id)) { this.safeSince.delete(id); this.attempted.delete(id); }
     for (const p of snapshot.owned) {
-      const unsafe = !snapshot.intelligence || !inZone(p, config.policy.zone) || snapshot.automated?.has(p.planetId)
+      const unsafe = !snapshot.intelligence || !inZone(p, config.policy.zone) || snapshot.automated?.has(p.planetId) || snapshot.autoUpgrading?.has(p.planetId)
         || enemies.near(p, config.policy.threatRadius).length > 0 || fleetsFor(snapshot, p.planetId).length > 0;
       if (unsafe) this.safeSince.delete(p.planetId);
       else if (!this.safeSince.has(p.planetId)) this.safeSince.set(p.planetId, Date.now());
     }
   }
   eligible(p: Planet, snapshot: WorldSnapshot, config: ModeConfig): boolean {
-    if (!config.settings.upgradeStable || !snapshot.intelligence || !Number.isInteger(p.level) || p.level! < 1 || p.level! >= 10
+    if (!config.settings.upgradeStable || snapshot.autoUpgrading?.has(p.planetId) || !snapshot.intelligence || !Number.isInteger(p.level) || p.level! < 1 || p.level! >= 10
       || this.attempted.get(p.planetId) === p.level || Date.now() - (this.safeSince.get(p.planetId) ?? Infinity) < config.settings.stableMs) return false;
     const near = (target: Pick<Planet, 'positionX' | 'positionY'>) => inZone(target, config.policy.zone) && distance(p, target) <= config.settings.radius;
     // Even unaffordable neutral points keep a source in the expansion economy.

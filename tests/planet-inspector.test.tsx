@@ -66,7 +66,7 @@ test('both subscriptions must apply before zero can be shown; updates and remova
 
 test('rapid menu changes cancel pending handles and late callbacks cannot publish old totals', () => {
   const f = setup(); let menu: PlanetMenu | null = f.menu;
-  const controller = new PlanetInspector(() => menu); onCleanup(() => controller.dispose());
+  const controller = new PlanetInspector(() => [], () => menu); onCleanup(() => controller.dispose());
   controller.refresh();
   assert.equal(f.subscriptions.length, 0);
   controller.load(f.menu);
@@ -99,7 +99,7 @@ test('timeout and subscription failure show unavailable, release handles and do 
 
 test('connection/identity changes require a new click without touching another owner', () => {
   const f = setup(), other = setup(); let menu = f.menu;
-  const controller = new PlanetInspector(() => menu); onCleanup(() => controller.dispose());
+  const controller = new PlanetInspector(() => [], () => menu); onCleanup(() => controller.dispose());
   const external = f.conn.subscriptionBuilder().subscribe('external');
   controller.refresh(); controller.load(menu); menu = { ...other.menu, identity: 'new' }; controller.refresh();
   assert.equal(f.subscriptions[0].unsubscribe.mock.callCount(), 0);
@@ -111,7 +111,7 @@ test('connection/identity changes require a new click without touching another o
 
 test('only an explicit current-target click subscribes; duplicate clicks and stale clicks cannot request', () => {
   const f = setup(); let menu: PlanetMenu | null = f.menu;
-  const controller = new PlanetInspector(() => menu); onCleanup(() => controller.dispose());
+  const controller = new PlanetInspector(() => [], () => menu); onCleanup(() => controller.dispose());
   for (let i = 0; i < 5; i++) controller.refresh();
   assert.equal(f.subscriptions.length, 0);
   menu = { ...f.menu, planetId: 2n };
@@ -171,14 +171,14 @@ test('send dial identifies destination from the map route and excludes sun desti
 
 test('inspector UI shows loading, totals, unknown, failures and cleans its root on disposal', async () => {
   const f = setup(); let menu: PlanetMenu | null = f.menu;
-  const controller = new PlanetInspector(() => menu);
+  const controller = new PlanetInspector(() => [], () => menu);
   let dispose!: () => void;
   await act(async () => { dispose = mountInspector(controller); });
   onCleanup(() => act(async () => dispose()));
   const root = document.getElementById('swarm-helper-incoming')!.shadowRoot!;
   assert.equal(root.querySelector('button')!.getAttribute('aria-label'), '查询在途兵力');
   assert.equal(root.querySelector('button')!.title, '查询在途兵力');
-  assert.equal(root.querySelector('header'), null);
+  assert.match(root.querySelector('header')!.textContent!, /星球 #1/);
   assert.equal(f.subscriptions.length, 0);
   const click = () => act(async () => { root.querySelector('button')!.click(); });
   await click();
@@ -204,7 +204,7 @@ test('inspector UI shows loading, totals, unknown, failures and cleans its root 
 });
 
 test('query button isolates pointer and keyboard events from game controls and removes listeners', async () => {
-  const f = setup(), controller = new PlanetInspector(() => f.menu);
+  const f = setup(), controller = new PlanetInspector(() => [], () => f.menu);
   let dispose!: () => void;
   await act(async () => { dispose = mountInspector(controller); });
   onCleanup(() => act(async () => dispose()));
@@ -230,4 +230,23 @@ test('overlay stays below the menu when possible and inside viewport near edges'
   const position = inspectorPosition({ left: 0, right: 200, top: 50, bottom: 250 }, 270, 130, 375, 300);
   assert.ok(position.left >= 8 && position.left + 270 <= 367);
   assert.ok(position.top >= 8 && position.top + 130 <= 292);
+});
+
+test('menu shows the full log ID and refreshes plans for the open planet without querying fleets', async () => {
+  const f = setup(), id = 18446744073709551615n;
+  let menu = { ...f.menu, planetId: id }, plan = '扩张 · 派 12 探针占领星球 #2';
+  const inspector = new PlanetInspector(current => current.planetId === id ? [plan] : ['当前没有针对本星的任务'], () => menu);
+  let dispose!: () => void;
+  await act(async () => { dispose = mountInspector(inspector); });
+  onCleanup(() => act(async () => dispose()));
+  const root = document.getElementById('swarm-helper-incoming')!.shadowRoot!;
+  assert.equal(root.querySelector('header')!.textContent, `星球 #${id}`);
+  assert.match(root.querySelector('ul')!.textContent!, /派 12 探针/);
+  await act(async () => { plan = '进攻 · 等待发射回执'; inspector.refresh(); });
+  assert.equal(root.querySelector('li')!.textContent, plan);
+  await act(async () => { menu = f.menu; inspector.refresh(); });
+  assert.equal(root.querySelector('header')!.textContent, '星球 #1');
+  assert.equal(root.querySelector('li')!.textContent, '当前没有针对本星的任务');
+  assert.equal(f.subscriptions.length, 0);
+  assert.equal(f.launchSwarm.mock.callCount(), 0);
 });

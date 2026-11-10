@@ -68,7 +68,7 @@ export class LogisticsPlanner {
   private nextDiscovery = 0;
   private state?: LogisticsState;
   private upgradeSignature?: string;
-  private upgradeInputs(snapshot: WorldSnapshot) { return fingerprint([snapshot.quoteVersion, [...snapshot.budgets], snapshot.planets, snapshot.fleets, [...snapshot.automated ?? []], [...snapshot.productionTicks ?? []]]); }
+  private upgradeInputs(snapshot: WorldSnapshot) { return fingerprint([snapshot.quoteVersion, [...snapshot.budgets], snapshot.planets, snapshot.fleets, [...snapshot.automated ?? []], [...snapshot.autoUpgrading ?? []], [...snapshot.productionTicks ?? []]]); }
   private routeBudget = logisticsQuoteBudget;
   stats = { routes: 0, reused: 0, checkedPairs: 0 };
   constructor(readonly kind: LogisticsKind) {}
@@ -327,7 +327,7 @@ export class LogisticsPlanner {
     const upgradeDelay = config.settings.intervalMs;
     const upgradedWait = level === 1 && stock >= cost ? upgradeDelay + readyAfter(stock - cost, 2, tickMs, fundingRequired,
       supplyEvents.map(event => ({ ...event, at: Math.max(0, event.at - upgradeDelay) }))) : Infinity;
-    const safeUpgrade = !!(world.upgrade || world.upgradeMany) && this.kind === 'planet' && config.settings.upgradeStable && campaign.upgraded !== level && level === 1
+    const safeUpgrade = !snapshot.autoUpgrading?.has(hub.planetId) && !!(world.upgrade || world.upgradeMany) && this.kind === 'planet' && config.settings.upgradeStable && campaign.upgraded !== level && level === 1
       && Date.now() - campaign.since >= config.settings.stableMs && !incoming.length && !campaign.deliveries.length
       && !snapshot.planets.some(p => hostile(p, snapshot) && distance(p, hub) <= config.policy.threatRadius)
       && !snapshot.planets.some(p => p.ownerId == null && distance(p, hub) <= config.settings.radius && p.probeCount + captureMargin <= stock)
@@ -366,7 +366,7 @@ export class LogisticsPlanner {
   }
   validUpgrade(job: Assignment, snapshot: WorldSnapshot, config: ModeConfig, available: number) {
     const hub = snapshot.owned.find(p => p.planetId === job.sourceId), target = snapshot.planets.find(p => p.planetId === job.campaignTargetId);
-    if (!hub || !target || hub.level !== 1 || available < job.count || !this.campaign || this.campaign.target !== job.campaignTargetId || this.campaign.upgraded === 1
+    if (!hub || !target || snapshot.autoUpgrading?.has(hub.planetId) || hub.level !== 1 || available < job.count || !this.campaign || this.campaign.target !== job.campaignTargetId || this.campaign.upgraded === 1
       || !this.validHub(hub, snapshot, config) || !this.validTarget(target, job.campaignTargetId!, snapshot, config) || target.probeCount !== job.garrison
       || this.upgradeSignature !== this.upgradeInputs(snapshot) || fleetsFor(snapshot, hub.planetId).length || !this.state || this.state.upgradeMs === undefined || this.state.upgradeMs + 1000 >= this.state.readyMs) return false;
     // A changed hub stock or a new threat requires a fresh ETA comparison.

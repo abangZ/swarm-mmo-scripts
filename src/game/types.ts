@@ -31,6 +31,7 @@ export interface Connection {
     launchSwarmAtSun?(args: { sourcePlanetId: bigint; targetSunId: bigint; probeCount: bigint }): Promise<void>;
     launchSwarmAtMeteorite?(args: { sourcePlanetId: bigint; targetMeteoriteId: bigint; probeCount: bigint }): Promise<void>;
     upgradePlanetsBulk?(args: { planetIds: bigint[] }): Promise<void>;
+    setUpgradeAutomationBulk?(args: { planetIds: bigint[]; enable: boolean }): Promise<void>;
     upgradePlanet?(args: { planetId: bigint }): Promise<void> };
   subscriptionBuilder(): {
     onApplied(fn: () => void): ReturnType<Connection['subscriptionBuilder']>;

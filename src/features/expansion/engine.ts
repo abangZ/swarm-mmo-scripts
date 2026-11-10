@@ -16,6 +16,7 @@ export interface ExpansionState {
   work?: { planningTiming?: import('../../runtime/planning').PlanningTiming; frontierTiming?: import('../../runtime/planning').PlanningTiming; logisticsMs?: number; logisticsRoutes?: number; logisticsReused?: number; scanning?: boolean; plan?: { startedAt: number; stage: string; completed?: number; total?: number }; frontier?: number; dispatch?: string; background?: number; inventory?: number };
   rally?: { hub: bigint; target: bigint; required: number; available: number; incoming: number; sources: number };
   rallies?: NonNullable<ExpansionState['rally']>[];
+  saving?: Assignment; confirming?: Assignment;
   attackDiagnostics?: AttackDiagnostics;
   planning?: { sources: number; ready: number; assigned: number; idle: SourceReport[] };
   metrics?: StrategyMetrics; decisions?: string[]; exposed?: number;

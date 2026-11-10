@@ -4,7 +4,26 @@ import assert from 'node:assert/strict';
 import { GameWorld, safeQuote } from '../src/game/expansion-world';
 import { getAutomationSession } from '../src/game/session';
 import { subscribe } from '../src/game/subscriptions';
-import { fixture } from './helpers/fixtures';
+import { fixture, planet } from './helpers/fixtures';
+
+test('native auto-upgrade shutdown targets only the owned gathering planet and validates session', async () => {
+  const hub = planet(9007199254740993n, 0, 0, true), f = fixture([hub]);
+  f.session.conn.db.swarm = { iter: () => [] };
+  const canvas = document.querySelector('canvas') as unknown as Record<string, any>;
+  canvas['__reactFiber$fixture'].return.memoizedProps.ref = { current: { quoteSend: () => null, listOwnedBodies: () => [] } };
+  const disable = f.session.conn.reducers.setUpgradeAutomationBulk = mock.fn(async () => {});
+  const world = new GameWorld();
+  await world.disableAutoUpgrade(hub.planetId);
+  assert.deepEqual(disable.mock.calls.map(call => call.arguments), [[{ planetIds: [hub.planetId], enable: false }]]);
+  hub.ownerId = undefined;
+  assert.throws(() => world.disableAutoUpgrade(hub.planetId), /所有权/);
+  hub.ownerId = { toHexString: () => 'me' };
+  delete f.session.conn.reducers.setUpgradeAutomationBulk;
+  assert.throws(() => world.disableAutoUpgrade(hub.planetId), /接口不可用/);
+  canvas['__reactFiber$fixture'].return.memoizedProps.myIdentity = 'other';
+  assert.throws(() => world.disableAutoUpgrade(hub.planetId), /身份已变化/);
+  assert.equal(disable.mock.callCount(), 1);
+});
 
 test('capture quote preserves the native winning count and rejects invalid quotes', () => {
   assert.deepEqual(safeQuote({ travelMs: 2000, lossPct: 0, outOfRange: false, exact: { reason: 'capture', probes: 8 } }), { count: 8, travelMs: 2000 });
@@ -81,7 +100,7 @@ test('regional adapter subscribes threats and technology locally, without expand
   Object.assign(f.session.conn.db, {
     swarm: { iter: () => [{ swarmId: 1n, ownerId: other, targetPlanetId: 1n, sourceX: 1, sourceY: 0, probeCount: 30, arrivalTime: { toMillis: () => 200000 } }] },
     clan_member2: { iter: () => [] }, player_tech: { iter: () => [] }, sun2: { iter: () => [] }, base: { iter: () => [] },
-    attack_automation: { iter: () => [] }, upgrade_automation: { iter: () => [{ planetId: 99n }] },
+    attack_automation: { iter: () => [{ sourcePlanetId: 1n }] }, upgrade_automation: { iter: () => [{ planetId: 99n }] },
     player: { iter: () => [{ identity: other, username: '邻居' }] },
   });
   const canvas = document.querySelector('canvas') as unknown as Record<string, any>;
@@ -104,7 +123,9 @@ test('regional adapter subscribes threats and technology locally, without expand
   assert.equal(snapshot.fleets![0].owner, enemy);
   assert.equal(snapshot.fleets![0].arriving, 30);
   assert.equal(snapshot.players!.get(enemy), '邻居');
-  assert.equal(snapshot.automated!.has(99n), true);
+  assert.equal(snapshot.automated!.has(99n), false);
+  assert.equal(snapshot.automated!.has(1n), true);
+  assert.equal(snapshot.autoUpgrading!.has(99n), true);
   assert.equal(snapshot.intelligence, true);
   queries.length = 0;
   await world.syncInventory([1n, 1n, 99n]);

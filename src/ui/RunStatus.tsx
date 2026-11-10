@@ -8,10 +8,10 @@ const labels: Record<ExpansionActivity, string> = {
   idle: '未启动', starting: '启动中', scanning: '扫描中', waiting: '等待中', queued: '排队中', sending: '发送中',
   sent: '运行中', captured: '运行中', paused: '暂缓操作', stopping: '停止中', stopped: '已停止', error: '已停止 · 异常',
 };
-export function statusLabel(state: ExpansionState, uncertain: boolean): string {
+export function statusLabel(state: ExpansionState, uncertain: boolean, now = Date.now()): string {
   if (state.running && !['paused', 'stopping', 'error', 'starting'].includes(state.activity) && state.work) {
     if (state.work.dispatch) return state.activity === 'sending' ? '等待确认' : '等待发射';
-    if (state.work.plan) return '规划中';
+    if (state.work.plan && now - state.work.plan.startedAt >= 2000) return '规划中';
     if (state.work.scanning) return '扫描中';
     if (state.queue.length) return '排队中';
     if (state.work.background) return '后台确认中';
@@ -19,10 +19,10 @@ export function statusLabel(state: ExpansionState, uncertain: boolean): string {
   }
   return uncertain && !state.running ? '结果未知 · 已锁定' : labels[state.activity];
 }
-export function StatusBadge({ state, uncertain }: { state: ExpansionState; uncertain: boolean }) {
+export function StatusBadge({ state, uncertain, now }: { state: ExpansionState; uncertain: boolean; now?: number }) {
   const tone = uncertain && !state.running || state.activity === 'error' ? 'error'
     : state.activity === 'paused' || state.activity === 'stopping' ? 'warning' : state.running ? 'active' : 'idle';
-  return <span className={`status-badge ${tone}`}><span className="status-dot" />{statusLabel(state, uncertain)}</span>;
+  return <span className={`status-badge ${tone}`}><span className="status-dot" />{statusLabel(state, uncertain, now)}</span>;
 }
 const clockFormatter = new Intl.DateTimeFormat('zh-CN', { hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false });
 export function clockTime(time: number): string { return clockFormatter.format(time); }
@@ -37,18 +37,19 @@ export function RunStatus({ state, uncertain, prefix = '', peaceful = false }: {
   const live = state.running && !['paused', 'stopping', 'error', 'starting'].includes(state.activity) ? state.work : undefined;
   // Frontline checks run roughly every second. Treat them as background
   // monitoring, not a replacement for the main action or a transient row.
+  const visiblePlan = live?.plan && now - live.plan.startedAt >= 2000 ? live.plan : undefined;
   const slowFrontier = live?.frontier !== undefined && now - live.frontier >= 2000;
   const elapsed = (start: number) => `${Math.max(0, Math.floor((now - start) / 1000))} 秒`;
   const nextScan = live?.scanning ? '扫描中…'
     : state.activity === 'paused' ? prefix ? '返回前台后扫描' : '自动恢复后扫描'
     : state.nextScanAt === null ? live?.plan ? '本轮规划后计时' : '—' : `${Math.max(0, Math.ceil((state.nextScanAt - now) / 1000))} 秒后`;
   return <div className="status-card">
-    <div className="section-heading"><h3>当前动作</h3><StatusBadge state={state} uncertain={uncertain} /></div>
+    <div className="section-heading"><h3>当前动作</h3><StatusBadge state={state} uncertain={uncertain} now={now} /></div>
     <p id={`${prefix}auto-status`} className="auto-status" role="status" aria-live="polite">{live
-      ? live.dispatch ?? (live.plan ? `正在${live.plan.stage}` : live.scanning ? '正在更新战区覆盖与情报' : state.queue.length ? `按已有计划执行，待执行 ${state.queue.length} 项` : live.background ? `后台确认 / 同步 ${live.background} 项；监测前线变化` : '暂无待执行任务；监测兵力变化，等待新机会')
+      ? live.dispatch ?? (visiblePlan ? `正在${visiblePlan.stage}` : live.scanning ? '正在更新战区覆盖与情报' : state.queue.length ? `按已有计划执行，待执行 ${state.queue.length} 项` : live.background ? `后台确认 / 同步 ${live.background} 项；监测前线变化` : '暂无待执行任务；监测兵力变化，等待新机会')
       : state.phase}</p>
     {live && <div className="expansion-progress">
-      {live.plan && <p>全局规划：{live.plan.stage}{live.plan.total !== undefined ? ` · 已检查 ${live.plan.completed ?? 0}/${live.plan.total} 颗来源` : ''} · 已耗时 {elapsed(live.plan.startedAt)}；已有队列继续执行</p>}
+      <p className="planning-status">{visiblePlan ? <>全局规划：{visiblePlan.stage}{visiblePlan.total !== undefined ? ` · 已检查 ${visiblePlan.completed ?? 0}/${visiblePlan.total} 颗来源` : ''} · 已耗时 {elapsed(visiblePlan.startedAt)}；已有队列继续执行</> : '后台评估：持续监测；已有队列继续执行'}</p>
       {!prefix && <p className="frontier-status">{peaceful ? '陨石监测' : '前线监测'}：{!peaceful && slowFrontier ? `正在检查 · ${elapsed(live.frontier!)}` : '已开启'}</p>}
       <p>待执行 {state.queue.length} 项 · 后台回执 / 同步 {live.background ?? 0} 项{live.inventory ? ` · 库存重试 ${live.inventory} 颗来源` : ''}</p>
       <p className="muted">最近事件：{state.phase}</p>
@@ -91,9 +92,9 @@ export function RunStatus({ state, uncertain, prefix = '', peaceful = false }: {
       <p>检查路线：可直攻 {state.attackDiagnostics.feasible} · 航时超限 {state.attackDiagnostics.tooSlow} · 兵力不足 {state.attackDiagnostics.insufficient} · 报价不可用 {state.attackDiagnostics.noQuote}</p>
     </div>}
     {state.planning && <div className="expansion-progress">
-      <p>本轮已安排 {state.planning.assigned} / {state.planning.sources} 颗来源 · {state.planning.ready} 颗具备可行方案</p>
+      <p>本轮已安排 {state.planning.assigned} / {state.planning.sources} 颗来源 · {state.planning.ready} 颗{peaceful ? '有可用兵力' : '具备可行方案'}</p>
       {!!state.planning.idle.length && <details><summary>未派兵原因（最多显示 6 颗）</summary>
-        <ul>{state.planning.idle.map(source => <li key={String(source.sourceId)}>
+        <ul>{state.planning.idle.slice(0, 6).map(source => <li key={String(source.sourceId)}>
           <strong>#{String(source.sourceId)} ({source.x}, {source.y}) · 可用 {source.available}</strong><br />{source.reason}
         </li>)}</ul>
       </details>}

@@ -2,7 +2,7 @@ import { assertSession, getAutomationSession, ownedPlanets } from './session';
 import { subscribe } from './subscriptions';
 import type { ExpansionWorld, WorldSnapshot, Fleet } from '../features/expansion/world';
 import { maxUpgradeBatch, members, targetKey, type Assignment, type ExpansionSettings, type TargetKind } from '../features/expansion/types';
-import type { Subscription, AutomationSession, Quote } from './types';
+import type { Subscription, AutomationSession, Quote, Session } from './types';
 import { validRoute, type Route } from '../features/expansion/cooperation';
 import { inZone, type ModeConfig } from '../features/commander/types';
 import { subscriptionBatches } from './subscription-batches';
@@ -29,6 +29,7 @@ export class GameWorld implements ExpansionWorld {
   private quoteCore?: string;
   private quoteEpoch = 0;
   private timings = { readTotalMs: 0, readCalls: 0, ownedBodiesMs: 0, quoteMaxMs: 0, slowQuotes: 0, syncCalls: 0, syncQueries: 0, syncTotalMs: 0, syncActive: 0, readMs: 0, scanMs: 0, syncMs: 0, quoteMs: 0, quoteCalls: 0, newSubscriptions: 0, reusedSubscriptions: 0 };
+  matchesSession(session: Session) { return session.conn === this.session.conn && session.identity === this.session.identity; }
   diagnostics() { return { ...this.timings }; }
   configure(configs: ModeConfig[]) { this.configs = configs; }
   needsScan() {
@@ -190,7 +191,8 @@ export class GameWorld implements ExpansionWorld {
     this.timings.readCalls++; this.timings.readTotalMs += this.timings.readMs;
     return { productionTicks, quoteVersion, quoteGlobalVersion, sourceQuoteVersions, attackMultiplierUpperBound, planets, owned, allOwned, budgets, incoming, fleets, fleetsByTarget, identity: this.session.identity, allies, intelligence: true,
       suns: [...db.sun2.iter()], meteorites: [...(db.meteorite2?.iter() ?? [])], bodyFleets,
-      automated: new Set([...db.attack_automation.iter()].map(a => a.sourcePlanetId).concat([...db.upgrade_automation.iter()].map(a => a.planetId))),
+      automated: new Set([...db.attack_automation.iter()].map(a => a.sourcePlanetId)),
+      autoUpgrading: new Set([...db.upgrade_automation.iter()].map(a => a.planetId)),
       players: new Map([...(db.player?.iter() ?? [])].map(p => [p.identity.toHexString(), p.username])),
     };
   }
@@ -241,6 +243,13 @@ export class GameWorld implements ExpansionWorld {
     if (job.targetKind === 'sun' && reducers.launchSwarmAtSun) return reducers.launchSwarmAtSun({ sourcePlanetId: job.sourceId, targetSunId: job.targetId, probeCount: BigInt(job.count) });
     if (job.targetKind === 'comet' && reducers.launchSwarmAtMeteorite) return reducers.launchSwarmAtMeteorite({ sourcePlanetId: job.sourceId, targetMeteoriteId: job.targetId, probeCount: BigInt(job.count) });
     throw new Error('目标的原生派兵接口不可用，未发射。');
+  }
+  disableAutoUpgrade(planetId: bigint): Promise<void> {
+    assertSession(this.session);
+    const planet = this.session.conn.db.planet.planetId.find(planetId);
+    if (planet?.ownerId?.toHexString() !== this.session.identity) throw new Error('集结星球已失去所有权，未关闭自动升级。');
+    if (!this.session.conn.reducers.setUpgradeAutomationBulk) throw new Error('原生自动升级设置接口不可用。');
+    return this.session.conn.reducers.setUpgradeAutomationBulk({ planetIds: [planetId], enable: false });
   }
   upgrade(planetId: bigint): Promise<void> {
     assertSession(this.session);

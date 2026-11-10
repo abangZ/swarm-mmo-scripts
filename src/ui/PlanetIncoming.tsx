@@ -31,15 +31,19 @@ export function PlanetIncoming({ snapshot, onLoad }: { snapshot: InspectorSnapsh
   }, [snapshot]);
   if (!snapshot) return null;
   const { incoming } = snapshot;
-  const idle = incoming.status === 'idle';
-  return <><style>{styles}</style><section ref={ref} className={`incoming${idle ? ' incoming-idle' : ''}`} aria-label="此星球在途兵力" style={{ ...position, zIndex: snapshot.menu.zIndex + 1 }}>
-    {!idle && <header>飞往此星球 <small>在途兵力</small></header>}
-    {incoming.status === 'idle' ? <button className="query-icon" type="button" title="查询在途兵力" aria-label="查询在途兵力" onClick={onLoad}>
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
-        <circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4" />
-        <path d="M12 12 18.4 5.6" /><circle cx="7" cy="16" r="1" fill="currentColor" stroke="none" />
-      </svg>
-    </button> : incoming.status === 'loading' ? <p>加载中…</p> : incoming.status === 'error' ? <><p>数据不可用</p><button type="button" onClick={onLoad}>重新查询</button></> : <>
+  return <><style>{styles}</style><section ref={ref} className="incoming" aria-label="星球编号与规划" style={{ ...position, zIndex: snapshot.menu.zIndex + 1 }}>
+    <header><span>星球 #{String(snapshot.menu.planetId)}</span>
+      {incoming.status === 'idle' && <button className="query-icon" type="button" title="查询在途兵力" aria-label="查询在途兵力" onClick={onLoad}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4" />
+          <path d="M12 12 18.4 5.6" /><circle cx="7" cy="16" r="1" fill="currentColor" stroke="none" />
+        </svg>
+      </button>}
+    </header>
+    <small>脚本规划</small>
+    <ul className="planet-plans" key={String(snapshot.menu.planetId)}>{snapshot.plan.map((line, i) => <li key={i}>{line}</li>)}</ul>
+    {incoming.status !== 'idle' && <small>飞往此星球的在途兵力</small>}
+    {incoming.status === 'idle' ? null : incoming.status === 'loading' ? <p>加载中…</p> : incoming.status === 'error' ? <><p>数据不可用</p><button type="button" onClick={onLoad}>重新查询</button></> : <>
       <FleetRow label="敌方在途" kind="enemy" total={incoming.totals.enemy} />
       <FleetRow label="我的在途" kind="mine" total={incoming.totals.mine} />
       {incoming.totals.ally.fleets > 0 && <FleetRow label="盟友在途" kind="ally" total={incoming.totals.ally} />}

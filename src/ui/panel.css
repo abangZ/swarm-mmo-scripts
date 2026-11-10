@@ -108,3 +108,5 @@ summary { cursor: pointer; }
 .app-version { margin-top: 5px; padding-left: 4px; color: #a6b8cf; font-size: 11px; text-shadow: 0 1px 3px #000; }
 .expansion-progress ul { margin: 8px 0 0; padding-left: 16px; }
 .expansion-progress li { margin-top: 8px; overflow-wrap: anywhere; }
+
+.planning-status { min-height: 3em; }

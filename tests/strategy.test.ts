@@ -121,3 +121,15 @@ test('region preferences persist independently and invalid/missing attack region
   assert.throws(() => parsePolicy({ ...forms.attack, scope: 'all' }, 'attack'), /战区/);
   assert.throws(() => parsePolicy({ ...forms.attack, enemy: 'bad' }, 'attack'), /敌人/);
 });
+
+
+test('native upgrades allow spending current inventory while forwarding still excludes the source', () => {
+  const f = intelligence(), c = config();
+  f.snapshot.fleets = []; c.policy.frontlinePercent = 0; c.settings.reserve = 5;
+  f.snapshot.budgets.set(1n, 100); f.snapshot.autoUpgrading = new Set([1n]);
+  assert.equal(availableBudgets(f.snapshot, [c], new Map()).get(1n), 95);
+  f.snapshot.budgets.set(1n, 10); // A native upgrade spent inventory after planning.
+  assert.equal(availableBudgets(f.snapshot, [c], new Map()).get(1n), 5);
+  f.snapshot.automated!.add(1n);
+  assert.equal(availableBudgets(f.snapshot, [c], new Map()).get(1n), 0);
+});

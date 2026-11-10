@@ -403,12 +403,13 @@ test('commander completes a fragment-to-sun campaign while continuing ordinary e
 });
 
 
-test('peaceful development waits for new meteorites, ignores planets and suns, and restores expansion after restart', async t => {
+test('peaceful development uses auto-upgrading sources, waits for meteorites and restores expansion after restart', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 100000 });
   t.mock.method(Math, 'random', () => 0.5);
   const f = specialWorld(), cfg = config();
   cfg.settings.peacefulDevelopment = 1;
   cfg.settings.captureMeteorites = 0; // A saved expansion preference must not disable this mode.
+  f.snapshot.autoUpgrading = new Set(f.snapshot.owned.map(p => p.planetId));
   cfg.settings.upgradeStable = 0;
   f.snapshot.suns = [sun()]; f.snapshot.budgets.set(1n, 500);
   f.world.quoteBody = (_source, _target, kind) => ({ count: kind === 'sun' ? 100 : 3, travelMs: 1000 });
@@ -450,5 +451,17 @@ test('peaceful upgrades ignore excluded planets but reserve nearby meteorite opp
   f.snapshot.meteorites = [meteorite()];
   assert.equal(upgrades.plans(f.snapshot, cfg, f.snapshot.budgets, new Set()).length, 0);
   f.snapshot.meteorites = []; cfg.settings.upgradeStable = 0;
+  assert.equal(upgrades.plans(f.snapshot, cfg, f.snapshot.budgets, new Set()).length, 0);
+});
+
+
+test('native auto-upgrading sources do not receive duplicate helper upgrades', t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 100000 });
+  const f = specialWorld(), cfg = config(), upgrades = new StableUpgrades();
+  f.snapshot.planets = [f.source]; f.snapshot.budgets.set(1n, 500);
+  upgrades.observe(f.snapshot, cfg); t.mock.timers.tick(cfg.settings.stableMs);
+  assert.equal(upgrades.plans(f.snapshot, cfg, f.snapshot.budgets, new Set()).length, 1);
+  f.snapshot.autoUpgrading = new Set([1n]);
+  assert.equal(upgrades.eligible(f.source, f.snapshot, cfg), false, 'queued upgrades are rejected too');
   assert.equal(upgrades.plans(f.snapshot, cfg, f.snapshot.budgets, new Set()).length, 0);
 });

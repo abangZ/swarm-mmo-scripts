@@ -1,3 +1,4 @@
+import type { PlanetMenu } from '../game/planet-menu';
 import { GameWorld } from '../game/expansion-world';
 import type { ExpansionState } from '../features/expansion/engine';
 import type { ExpansionWorld } from '../features/expansion/world';
@@ -41,6 +42,7 @@ export class AppController {
       expansion: { ...this.engine.states.expansion }, attack: { ...this.engine.states.attack }, logs: [], reviewed: false, unlocking: false, unlockStatus: '',
     };
   }
+  planetPlan = (menu: PlanetMenu) => this.engine.planetPlan(menu, menu.planetId);
   getSnapshot = (): AppState => this.state;
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   private patch(patch: Partial<AppState>): void {

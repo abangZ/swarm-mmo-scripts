@@ -7,11 +7,11 @@ function Inspector({ controller }: { controller: PlanetInspector }) {
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   return <PlanetIncoming snapshot={snapshot} onLoad={() => { if (snapshot) controller.load(snapshot.menu); }} />;
 }
-export function mountInspector(controller = new PlanetInspector()): () => void {
+export function mountInspector(controller: PlanetInspector): () => void {
   const host = document.createElement('div');
   host.id = 'swarm-helper-incoming';
   host.style.pointerEvents = 'none';
-  const events = ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'dblclick'];
+  const events = ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'dblclick', 'wheel'];
   const isolate = (event: Event) => event.stopPropagation();
   for (const type of events) host.addEventListener(type, isolate);
   // The native send dial listens for Enter at window capture. Install before it
